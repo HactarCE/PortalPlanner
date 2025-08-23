@@ -2,20 +2,17 @@ use std::ops::{Index, IndexMut};
 
 use serde::{Deserialize, Serialize};
 
-/// Horizontal axis perpendicular to a portal's surface.
+use crate::Dimension;
+
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Axis {
     X,
+    Y,
     Z,
 }
 impl Axis {
-    /// Returns the other horizontal axis.
-    pub fn other(self) -> Axis {
-        match self {
-            Axis::X => Axis::Z,
-            Axis::Z => Axis::X,
-        }
-    }
+    /// Array of all axes.
+    pub const ALL: [Axis; 3] = [Axis::X, Axis::Y, Axis::Z];
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
@@ -24,20 +21,22 @@ pub struct BlockPos {
     pub y: i64,
     pub z: i64,
 }
-impl Index<Axis> for BlockPos {
+impl<T: Into<Axis>> Index<T> for BlockPos {
     type Output = i64;
 
-    fn index(&self, index: Axis) -> &Self::Output {
-        match index {
+    fn index(&self, index: T) -> &Self::Output {
+        match index.into() {
             Axis::X => &self.x,
+            Axis::Y => &self.y,
             Axis::Z => &self.z,
         }
     }
 }
-impl IndexMut<Axis> for BlockPos {
-    fn index_mut(&mut self, index: Axis) -> &mut Self::Output {
-        match index {
+impl<T: Into<Axis>> IndexMut<T> for BlockPos {
+    fn index_mut(&mut self, index: T) -> &mut Self::Output {
+        match index.into() {
             Axis::X => &mut self.x,
+            Axis::Y => &mut self.y,
             Axis::Z => &mut self.z,
         }
     }
@@ -59,20 +58,22 @@ pub struct WorldPos {
     pub y: f64,
     pub z: f64,
 }
-impl Index<Axis> for WorldPos {
+impl<T: Into<Axis>> Index<T> for WorldPos {
     type Output = f64;
 
-    fn index(&self, index: Axis) -> &Self::Output {
-        match index {
+    fn index(&self, index: T) -> &Self::Output {
+        match index.into() {
             Axis::X => &self.x,
+            Axis::Y => &self.y,
             Axis::Z => &self.z,
         }
     }
 }
-impl IndexMut<Axis> for WorldPos {
-    fn index_mut(&mut self, index: Axis) -> &mut Self::Output {
-        match index {
+impl<T: Into<Axis>> IndexMut<T> for WorldPos {
+    fn index_mut(&mut self, index: T) -> &mut Self::Output {
+        match index.into() {
             Axis::X => &mut self.x,
+            Axis::Y => &mut self.y,
             Axis::Z => &mut self.z,
         }
     }
@@ -84,6 +85,22 @@ impl From<BlockPos> for WorldPos {
             x: x as f64,
             y: y as f64,
             z: z as f64,
+        }
+    }
+}
+impl WorldPos {
+    pub fn nether_to_overworld(self) -> Self {
+        WorldPos {
+            x: self.x * Dimension::Nether.scale(),
+            y: self.y,
+            z: self.z * Dimension::Nether.scale(),
+        }
+    }
+    pub fn overworld_to_nether(self) -> Self {
+        WorldPos {
+            x: self.x / Dimension::Nether.scale(),
+            y: self.y,
+            z: self.z / Dimension::Nether.scale(),
         }
     }
 }
