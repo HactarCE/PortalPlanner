@@ -3,6 +3,32 @@ name = "portal_tool"
 version = "0.1.0"
 edition = "2024"
 
+[workspace.lints.rust]
+missing_docs = "warn"
+rust_2018_idioms = "warn"
+unused_crate_dependencies = "warn"
+
+[workspace.lints.clippy]
+cargo = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+
+assigning_clones = "allow"
+comparison_chain = "allow"
+doc_markdown = "warn"
+if_then_some_else_none = "warn"
+type_complexity = "allow"
+manual_let_else = "warn"
+match_like_matches_macro = "allow"
+semicolon_if_nothing_returned = "warn"
+semicolon_inside_block = "warn"
+stable_sort_primitive = "warn"
+too_many_arguments = "allow"
+undocumented_unsafe_blocks = "warn"
+uninlined_format_args = "warn"
+unwrap_used = "warn"
+
+multiple_crate_versions = { level = "allow", priority = 1 }
+
 [dependencies]
 eframe = "0.32.1"
 egui = "0.32.1"
