@@ -64,8 +64,8 @@ impl Portal {
         result.max.z += entity.width / 2.0;
         if !entity.is_projectile {
             // Restrict to within the portal frame.
-            result.min[self.axis] += entity.width;
-            result.max[self.axis] -= entity.width;
+            result.min[self.width_axis()] += entity.width;
+            result.max[self.width_axis()] -= entity.width;
         }
         result
     }
@@ -89,6 +89,15 @@ impl Portal {
         }
     }
 
+    /// Returns the axis of the width of the portal.
+    pub fn width_axis(&self) -> Axis {
+        self.axis.other().into()
+    }
+    /// Returns the axis of the depth of the portal.
+    pub fn depth_axis(&self) -> Axis {
+        self.axis.into()
+    }
+
     /// Adjusts `min`, ensuring that the portal is valid. If `lock_size` is
     /// `true`, then the size is preserved; otherwise, `min` is adjusted as
     /// little as possible.
@@ -98,12 +107,12 @@ impl Portal {
         lock_size: bool,
         dimension: Dimension,
     ) -> R {
+        let w = self.width_axis();
+        let h = Axis::Y; // height axis
+        let d = self.depth_axis();
+
         let min = &mut self.region.min;
         let max = &mut self.region.max;
-
-        let w = self.axis; // width axis
-        let h = Axis::Y; // height axis
-        let d = self.axis.other(); // depth axis
 
         let dw = max[w].saturating_sub(min[w]);
         let dd = max[d].saturating_sub(min[d]);
@@ -138,12 +147,12 @@ impl Portal {
         lock_size: bool,
         dimension: Dimension,
     ) -> R {
+        let w = self.width_axis(); // width axis
+        let h = Axis::Y; // height axis
+        let d = self.depth_axis(); // depth axis
+
         let min = &mut self.region.min;
         let max = &mut self.region.max;
-
-        let w = self.axis; // width axis
-        let d = self.axis.other(); // depth axis
-        let h = Axis::Y; // height axis
 
         let dw = max[w].saturating_sub(min[w]);
         let dd = max[d].saturating_sub(min[d]);
@@ -172,7 +181,7 @@ impl Portal {
     /// Adjusts the width of the portal, ensuring that the portal is valid.
     /// `min` is preserved.
     pub fn adjust_width<R>(&mut self, f: impl FnOnce(&mut i64) -> R) -> R {
-        let w = self.axis; // width axis
+        let w = self.width_axis();
         let mut width = self.region.max[w] - self.region.min[w] + 1;
         let r = f(&mut width);
         width = width.at_least(Self::MIN_WIDTH);
@@ -202,15 +211,19 @@ impl Portal {
     }
 
     pub fn adjust_axis<R>(&mut self, f: impl FnOnce(&mut PortalAxis) -> R) -> R {
+        let w = self.width_axis();
+
         let min = &mut self.region.min;
         let max = &mut self.region.max;
-
-        let w = self.axis; // width axis
         let dw = max[w] - min[w];
 
         let r = f(&mut self.axis);
-        let w = self.axis; // new width axis
-        let d = w.other(); // new depth axis
+
+        let w = self.width_axis();
+        let d = self.depth_axis();
+
+        let min = &mut self.region.min;
+        let max = &mut self.region.max;
         max[w] = min[w] + dw;
         max[d] = min[d];
 
