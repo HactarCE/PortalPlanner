@@ -1,5 +1,7 @@
-use egui::Widget;
+use std::ops::RangeInclusive;
+
 use egui::emath::GuiRounding;
+use egui::{Widget, emath::Numeric};
 
 mod camera;
 mod entity;
@@ -21,6 +23,15 @@ pub const SCROLL_SENSITIVITY: f32 = 0.25;
 pub const SAVE_FILE_PATH: &str = "world.json";
 pub const PLOT_MARGIN: f32 = 8.0;
 
+pub const CMD_Z: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
+pub const CMD_SHIFT_Z: egui::KeyboardShortcut = egui::KeyboardShortcut::new(
+    egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
+    egui::Key::Z,
+);
+pub const CMD_Y: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y);
+
 fn main() -> eframe::Result {
     eframe::run_native(
         "Portal Tool",
@@ -35,6 +46,10 @@ pub struct App {
 
     dimension: Dimension,
     lock_portal_size: bool,
+
+    last_saved_state: World,
+    undo_history: Vec<World>,
+    redo_history: Vec<World>,
 }
 
 impl App {
@@ -42,10 +57,12 @@ impl App {
         cc.egui_ctx
             .style_mut(|style| style.explanation_tooltips = true);
 
-        let world = std::fs::read(SAVE_FILE_PATH)
+        let world: World = std::fs::read(SAVE_FILE_PATH)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
+
+        let last_saved_state = world.clone();
 
         Self {
             world,
@@ -53,11 +70,15 @@ impl App {
 
             dimension: Overworld,
             lock_portal_size: true,
+
+            last_saved_state,
+            undo_history: vec![],
+            redo_history: vec![],
         }
     }
 
     fn save_to_file(&self) {
-        if let Ok(bytes) = serde_json::to_vec(&self.world) {
+        if let Ok(bytes) = serde_json::to_vec_pretty(&self.world) {
             match std::fs::write(SAVE_FILE_PATH, &bytes) {
                 Ok(()) => (),
                 Err(e) => eprintln!("error saving {SAVE_FILE_PATH:?}: {e}"),
@@ -65,7 +86,24 @@ impl App {
         }
     }
 
+    fn undo(&mut self) {
+        if let Some(new_state) = self.undo_history.pop() {
+            let old_state = std::mem::replace(&mut self.world, new_state);
+            self.last_saved_state = self.world.clone();
+            self.redo_history.push(old_state);
+        }
+    }
+    fn redo(&mut self) {
+        if let Some(new_state) = self.redo_history.pop() {
+            let old_state = std::mem::replace(&mut self.world, new_state);
+            self.last_saved_state = self.world.clone();
+            self.undo_history.push(old_state);
+        }
+    }
+
     fn show_controls(&mut self, ui: &mut egui::Ui) {
+        let mut changed = false;
+
         ui.horizontal(|ui| {
             let old_dimension = self.dimension;
             for dim in [Overworld, Nether] {
@@ -85,6 +123,7 @@ impl App {
             if ui.button("Add portal pair").clicked() {
                 self.add_portal_in_overworld();
                 self.add_portal_in_nether();
+                changed = true;
             }
 
             ui.checkbox(&mut self.lock_portal_size, "Lock portal size");
@@ -94,6 +133,10 @@ impl App {
             self.show_portal_list(&mut uis[0], Overworld);
             self.show_portal_list(&mut uis[1], Nether);
         });
+
+        if changed {
+            self.save_to_file();
+        }
     }
 
     fn show_portal_list(&mut self, ui: &mut egui::Ui, dimension: Dimension) {
@@ -128,22 +171,20 @@ impl App {
             });
 
             portal.adjust_min(
-                |min| show_block_pos_edit(ui, min, dimension),
+                |min| show_block_pos_edit(ui, min),
                 self.lock_portal_size,
                 dimension,
             );
 
             portal.adjust_max(
-                |max| show_block_pos_edit(ui, max, dimension),
+                |max| show_block_pos_edit(ui, max),
                 self.lock_portal_size,
                 dimension,
             );
 
             ui.horizontal(|ui| {
-                ui.label("Width");
-                portal.adjust_width(|w| dv_i64(w).ui(ui));
-                ui.label("Height");
-                portal.adjust_height(|h| dv_i64(h).ui(ui), dimension);
+                portal.adjust_width(|w| dv_i64(ui, "Width", w));
+                portal.adjust_height(|h| dv_i64(ui, "Height", h), dimension);
             });
 
             keep
@@ -185,6 +226,7 @@ impl App {
                 if Plane::XZ == plane { -y } else { y }.to_string()
             })
             .allow_axis_zoom_drag(false)
+            .allow_boxed_zoom(false)
             .show_x(false)
             .show_y(false)
             .coordinates_formatter(
@@ -215,7 +257,7 @@ impl App {
             let mut bounds_from_camera = egui_plot::PlotBounds::NOTHING;
             let [x, y] = match plane {
                 Plane::XY => [self.camera.pos.x, self.camera.pos.y],
-                Plane::XZ => [self.camera.pos.x, self.camera.pos.z],
+                Plane::XZ => [self.camera.pos.x, -self.camera.pos.z],
                 Plane::ZY => [self.camera.pos.z, self.camera.pos.y],
             };
             let old_width = plot_ui.plot_bounds().width();
@@ -235,7 +277,7 @@ impl App {
             let PlotPoint { x, y } = bounds.center();
             match plane {
                 Plane::XY => (new_camera.pos.x, new_camera.pos.y) = (x, y),
-                Plane::XZ => (new_camera.pos.x, new_camera.pos.z) = (x, y),
+                Plane::XZ => (new_camera.pos.x, new_camera.pos.z) = (x, -y),
                 Plane::ZY => (new_camera.pos.z, new_camera.pos.y) = (x, y),
             }
             new_camera.width = bounds.width();
@@ -294,6 +336,24 @@ impl App {
             .stroke((stroke_width, stroke_color));
 
         plot_ui.add(polygon);
+        if !portal.name.is_empty() {
+            let mut job = egui::text::LayoutJob::default();
+            job.append(
+                &portal.name,
+                0.0,
+                egui::TextFormat::simple(
+                    egui::FontId::proportional(14.0),
+                    stroke_color.linear_multiply(0.25).additive()
+                        + egui::Color32::WHITE.linear_multiply(0.75).additive(),
+                ),
+            );
+
+            plot_ui.add(egui_plot::Text::new(
+                "",
+                world_pos_to_plot_point(region.center(), plane),
+                job,
+            ));
+        }
     }
 }
 
@@ -340,6 +400,28 @@ impl eframe::App for App {
                     .auto_shrink([false; 2])
                     .show(ui, |ui| self.show_controls(ui))
             });
+
+            let is_text_field_active = ui.ctx().wants_keyboard_input();
+            ui.input_mut(|input| {
+                if !input.pointer.is_decidedly_dragging() && !is_text_field_active {
+                    if self.last_saved_state != self.world {
+                        let state_to_save =
+                            std::mem::replace(&mut self.last_saved_state, self.world.clone());
+                        self.redo_history.clear();
+                        self.undo_history.push(state_to_save);
+                        self.save_to_file();
+                    }
+
+                    // Consume the most specific shortcut first
+                    if input.consume_shortcut(&CMD_SHIFT_Z) || input.consume_shortcut(&CMD_Y) {
+                        self.redo();
+                        self.save_to_file();
+                    } else if input.consume_shortcut(&CMD_Z) {
+                        self.undo();
+                        self.save_to_file();
+                    }
+                }
+            })
         });
     }
 }
@@ -359,28 +441,12 @@ fn world_pos_to_plot_point(pos: WorldPos, slice: Plane) -> PlotPoint {
     PlotPoint { x, y }
 }
 
-fn show_block_pos_edit(
-    ui: &mut egui::Ui,
-    BlockPos { x, y, z }: &mut BlockPos,
-    dimension: Dimension,
-) -> egui::Response {
-    let y_range = dimension.y_range();
-
-    let mut changed = false;
-    let mut r = ui.horizontal(|ui| {
-        coordinate_label(ui, "X");
-        changed |= ui.add(dv_i64(x)).changed();
-
-        coordinate_label(ui, "Y");
-        changed |= ui.add(dv_i64(y).range(y_range)).changed();
-
-        coordinate_label(ui, "Z");
-        changed |= ui.add(dv_i64(z)).changed();
+fn show_block_pos_edit(ui: &mut egui::Ui, BlockPos { x, y, z }: &mut BlockPos) {
+    ui.horizontal(|ui| {
+        dv_i64(ui, "X", x);
+        dv_i64(ui, "Y", y);
+        dv_i64(ui, "Z", z);
     });
-    if changed {
-        r.response.mark_changed();
-    }
-    r.response
 }
 
 fn show_world_pos_edit(
@@ -388,27 +454,28 @@ fn show_world_pos_edit(
     WorldPos { x, y, z }: &mut WorldPos,
     dimension: Dimension,
 ) -> egui::Response {
-    let y_range = dimension.y_range();
-
-    let mut changed = false;
-    let mut r = ui.horizontal(|ui| {
+    ui.horizontal(|ui| {
         coordinate_label(ui, "X");
-        changed |= ui.add(egui::DragValue::new(x)).changed();
+        ui.add(egui::DragValue::new(x));
 
         coordinate_label(ui, "Y");
-        changed |= ui.add(egui::DragValue::new(y).range(y_range)).changed();
+        ui.add(egui::DragValue::new(y).range(dimension.y_range()));
 
         coordinate_label(ui, "Z");
-        changed |= ui.add(egui::DragValue::new(z)).changed();
-    });
-    if changed {
-        r.response.mark_changed();
-    }
-    r.response
+        ui.add(egui::DragValue::new(z));
+    })
+    .response
 }
 
-pub fn dv_i64(i: &mut i64) -> egui::DragValue<'_> {
-    egui::DragValue::new(i).speed(0.1)
+pub fn dv_i64(ui: &mut egui::Ui, label: &str, i: &mut i64) -> egui::Response {
+    ui.horizontal(|ui| {
+        coordinate_label(ui, label);
+        egui::DragValue::new(i)
+            .speed(0.125)
+            .update_while_editing(false)
+            .ui(ui);
+    })
+    .response
 }
 
 fn coordinate_label(ui: &mut egui::Ui, text: &str) -> egui::Response {

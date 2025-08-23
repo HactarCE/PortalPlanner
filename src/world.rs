@@ -56,12 +56,12 @@ impl Dimension {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 pub struct World {
     pub portals: WorldPortals,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 pub struct WorldPortals {
     pub overworld: Vec<Portal>,
     pub nether: Vec<Portal>,
