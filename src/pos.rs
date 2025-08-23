@@ -55,12 +55,12 @@ impl From<WorldPos> for BlockPos {
 
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]
 pub struct WorldPos {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
 }
 impl Index<Axis> for WorldPos {
-    type Output = f32;
+    type Output = f64;
 
     fn index(&self, index: Axis) -> &Self::Output {
         match index {
@@ -81,9 +81,9 @@ impl From<BlockPos> for WorldPos {
     fn from(value: BlockPos) -> Self {
         let BlockPos { x, y, z } = value;
         WorldPos {
-            x: x as f32,
-            y: y as f32,
-            z: z as f32,
+            x: x as f64,
+            y: y as f64,
+            z: z as f64,
         }
     }
 }

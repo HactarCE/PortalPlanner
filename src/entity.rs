@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]
 pub struct Entity {
     /// Width of the entity's hitbox along the X and Z axes
-    pub width: f32,
+    pub width: f64,
     /// Height of the entity's hitbox along the Y axis.
-    pub height: f32,
+    pub height: f64,
     /// Whether the entity is a projectile, in which case it is possible to clip
     /// into the portal frame.
     pub is_projectile: bool,
