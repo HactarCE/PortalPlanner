@@ -149,46 +149,77 @@ impl App {
             }
         }
 
-        self.world.portals[dimension].retain_mut(|portal| {
-            let mut keep = true;
-            ui.add_space(8.0);
+        ui.separator();
 
-            ui.horizontal(|ui| {
-                if ui.button("🗑").clicked() {
-                    keep = false;
-                }
-                egui::TextEdit::singleline(&mut portal.name)
-                    .hint_text("Portal name")
-                    .show(ui);
-            });
+        let mut reorder_swap = None;
+        let list_len = self.world.portals[dimension].len();
+        egui::ScrollArea::vertical()
+            .id_salt(dimension)
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                let mut i = 0;
+                self.world.portals[dimension].retain_mut(|portal| {
+                    let mut keep = true;
 
-            portal.adjust_axis(|axis| {
-                ui.horizontal(|ui| {
-                    ui.label("Facing");
-                    ui.selectable_value(axis, PortalAxis::X, "X");
-                    ui.selectable_value(axis, PortalAxis::Z, "Z");
+                    if i > 0 {
+                        ui.separator();
+                    }
+
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            if ui.button("🗑").clicked() {
+                                keep = false;
+                            }
+
+                            if ui.add_visible(i > 0, egui::Button::new("⬆")).clicked() {
+                                reorder_swap = Some((i, i - 1));
+                            }
+                            let end = list_len - 1;
+                            if ui.add_visible(i < end, egui::Button::new("⬇")).clicked() {
+                                reorder_swap = Some((i, i + 1));
+                            }
+                            i += 1;
+                        });
+
+                        ui.vertical(|ui| {
+                            egui::TextEdit::singleline(&mut portal.name)
+                                .hint_text("Portal name")
+                                .show(ui);
+
+                            portal.adjust_axis(|axis| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Facing");
+                                    ui.selectable_value(axis, PortalAxis::X, "X");
+                                    ui.selectable_value(axis, PortalAxis::Z, "Z");
+                                });
+                            });
+
+                            portal.adjust_min(
+                                |min| show_block_pos_edit(ui, min),
+                                self.lock_portal_size,
+                                dimension,
+                            );
+
+                            portal.adjust_max(
+                                |max| show_block_pos_edit(ui, max),
+                                self.lock_portal_size,
+                                dimension,
+                            );
+
+                            ui.horizontal(|ui| {
+                                portal.adjust_width(|w| dv_i64(ui, "Width", w));
+                                portal.adjust_height(|h| dv_i64(ui, "Height", h), dimension);
+                            });
+                        });
+                    });
+
+                    keep
                 });
             });
 
-            portal.adjust_min(
-                |min| show_block_pos_edit(ui, min),
-                self.lock_portal_size,
-                dimension,
-            );
-
-            portal.adjust_max(
-                |max| show_block_pos_edit(ui, max),
-                self.lock_portal_size,
-                dimension,
-            );
-
-            ui.horizontal(|ui| {
-                portal.adjust_width(|w| dv_i64(ui, "Width", w));
-                portal.adjust_height(|h| dv_i64(ui, "Height", h), dimension);
-            });
-
-            keep
-        });
+        if let Some((i, j)) = reorder_swap {
+            self.world.portals[dimension].swap(i, j);
+        }
     }
 
     fn add_portal_in_overworld(&mut self) {
@@ -396,7 +427,7 @@ impl eframe::App for App {
             self.camera = new_camera;
 
             ui.scope_builder(egui::UiBuilder::new().max_rect(right_top), |ui| {
-                egui::ScrollArea::both()
+                egui::ScrollArea::horizontal()
                     .auto_shrink([false; 2])
                     .show(ui, |ui| self.show_controls(ui))
             });
