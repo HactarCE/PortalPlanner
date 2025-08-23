@@ -1,7 +1,7 @@
 use egui::NumExt;
 use serde::{Deserialize, Serialize};
 
-use crate::{BlockPos, WorldPos};
+use crate::{BlockPos, ConvertDimension, WorldPos};
 
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct BlockRegion {
@@ -43,5 +43,30 @@ impl From<BlockRegion> for WorldRegion {
         max.y += 1.0;
         max.z += 1.0;
         Self { min, max }
+    }
+}
+
+impl ConvertDimension for WorldRegion {
+    fn nether_to_overworld(self) -> Self {
+        Self {
+            min: self.min.nether_to_overworld(),
+            max: self.max.nether_to_overworld(),
+        }
+    }
+    fn overworld_to_nether(self) -> Self {
+        Self {
+            min: self.min.overworld_to_nether(),
+            max: self.max.overworld_to_nether(),
+        }
+    }
+}
+
+impl WorldRegion {
+    pub fn center(self) -> WorldPos {
+        WorldPos {
+            x: (self.min.x + self.max.x) * 0.5,
+            y: (self.min.y + self.max.y) * 0.5,
+            z: (self.min.z + self.max.z) * 0.5,
+        }
     }
 }

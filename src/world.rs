@@ -46,6 +46,14 @@ impl Dimension {
     pub fn y_range(self) -> RangeInclusive<i64> {
         self.y_min()..=self.y_max()
     }
+
+    /// Returns the other dimension.
+    pub fn other(self) -> Dimension {
+        match self {
+            Dimension::Overworld => Dimension::Nether,
+            Dimension::Nether => Dimension::Overworld,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -75,6 +83,25 @@ impl IndexMut<Dimension> for WorldPortals {
         match index {
             Dimension::Overworld => &mut self.overworld,
             Dimension::Nether => &mut self.nether,
+        }
+    }
+}
+
+/// Trait for types that can be converted between dimensions.
+pub trait ConvertDimension: Sized {
+    #[must_use]
+    fn nether_to_overworld(self) -> Self;
+
+    #[must_use]
+    fn overworld_to_nether(self) -> Self;
+
+    #[must_use]
+    fn convert_dimension(self, from: Dimension, to: Dimension) -> Self {
+        match (from, to) {
+            (Dimension::Overworld, Dimension::Overworld) => self,
+            (Dimension::Overworld, Dimension::Nether) => self.overworld_to_nether(),
+            (Dimension::Nether, Dimension::Overworld) => self.nether_to_overworld(),
+            (Dimension::Nether, Dimension::Nether) => self,
         }
     }
 }

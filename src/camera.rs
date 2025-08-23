@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::WorldPos;
 
-/// Slice of the world to view.
+/// Plane of the world to view.
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum ViewSlice {
+pub enum Plane {
     #[default]
     XY,
     XZ,

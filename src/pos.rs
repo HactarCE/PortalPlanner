@@ -1,8 +1,9 @@
+use std::fmt;
 use std::ops::{Index, IndexMut};
 
 use serde::{Deserialize, Serialize};
 
-use crate::Dimension;
+use crate::{ConvertDimension, Dimension};
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Axis {
@@ -88,19 +89,29 @@ impl From<BlockPos> for WorldPos {
         }
     }
 }
-impl WorldPos {
-    pub fn nether_to_overworld(self) -> Self {
+impl ConvertDimension for WorldPos {
+    fn nether_to_overworld(self) -> Self {
         WorldPos {
             x: self.x * Dimension::Nether.scale(),
             y: self.y,
             z: self.z * Dimension::Nether.scale(),
         }
     }
-    pub fn overworld_to_nether(self) -> Self {
+    fn overworld_to_nether(self) -> Self {
         WorldPos {
             x: self.x / Dimension::Nether.scale(),
             y: self.y,
             z: self.z / Dimension::Nether.scale(),
         }
+    }
+}
+impl fmt::Display for WorldPos {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.x.fmt(f)?;
+        write!(f, ", ")?;
+        self.y.fmt(f)?;
+        write!(f, ", ")?;
+        self.z.fmt(f)?;
+        Ok(())
     }
 }
