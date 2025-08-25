@@ -34,7 +34,7 @@ pub const SAVE_FILE_PATH: &str = "world.json";
 pub const PLOT_MARGIN: f32 = 8.0;
 
 /// Animation speed when switching dimensions.
-pub const ANIMATION_SPEED: f64 = 5.0;
+pub const ANIMATION_SPEED: f64 = 8.0;
 
 /// Ctrl+Z shortcut for undo.
 pub const CMD_Z: egui::KeyboardShortcut =
@@ -782,8 +782,7 @@ impl Default for AnimationState {
 impl AnimationState {
     fn step(&mut self, dt: f64) {
         self.width_scale = self.width_scale.powf(1.0 - dt * ANIMATION_SPEED);
-        dbg!(self.width_scale);
-        if self.width_scale.log2().abs() < 0.01 {
+        if self.width_scale.log2().abs() < 0.0025 {
             self.width_scale = 1.0;
         }
     }
