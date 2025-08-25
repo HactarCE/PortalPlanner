@@ -205,9 +205,9 @@ impl App {
 
         ui.separator();
 
-        let mut reorder_swap = None;
+        let mut reorder_drag_source = None;
+        let mut hovered_index = None;
         let mut remove = None;
-        let list_len = self.world.portals[dimension].len();
         egui::ScrollArea::vertical()
             .id_salt(dimension)
             .auto_shrink([false; 2])
@@ -217,94 +217,137 @@ impl App {
                         ui.separator();
                     }
 
-                    egui::collapsing_header::CollapsingState::load_with_default_open(
-                        ui.ctx(),
-                        egui::Id::new(portal.id),
-                        false,
-                    )
-                    .show_header(ui, |ui| {
-                        egui::TextEdit::singleline(&mut portal.name)
-                            .hint_text("Portal name")
-                            .show(ui);
-                    })
-                    .body(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                if ui.button("🗑").clicked() {
-                                    remove = Some(i);
-                                }
+                    let r = ui.horizontal(|ui| {
+                        let mut reorder_drag_rect =
+                            egui::Rect::from_min_size(ui.cursor().min, egui::vec2(12.0, 18.0));
+                        ui.advance_cursor_after_rect(reorder_drag_rect);
 
-                                if ui.add_visible(i > 0, egui::Button::new("⬆")).clicked() {
-                                    reorder_swap = Some((i, i - 1));
-                                }
-                                let end = list_len - 1;
-                                if ui.add_visible(i < end, egui::Button::new("⬇")).clicked() {
-                                    reorder_swap = Some((i, i + 1));
-                                }
-                            });
+                        ui.vertical(|ui| {
+                            egui::collapsing_header::CollapsingState::load_with_default_open(
+                                ui.ctx(),
+                                egui::Id::new(portal.id).with("header"),
+                                false,
+                            )
+                            .show_header(ui, |ui| {
+                                egui::Sides::new().shrink_left().show(
+                                    ui,
+                                    |ui| {
+                                        ui.horizontal(|ui| {
+                                            egui::TextEdit::singleline(&mut portal.name)
+                                                .hint_text("Portal name")
+                                                .show(ui);
+                                        });
+                                    },
+                                    |ui| {
+                                        if ui.button("🗑").clicked() {
+                                            remove = Some(i);
+                                        }
+                                    },
+                                );
+                            })
+                            .body(|ui| {
+                                ui.vertical(|ui| {
+                                    portal.adjust_axis(|axis| {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Facing");
+                                            ui.selectable_value(axis, PortalAxis::X, "X");
+                                            ui.selectable_value(axis, PortalAxis::Z, "Z");
+                                        });
+                                    });
 
-                            ui.vertical(|ui| {
-                                portal.adjust_axis(|axis| {
+                                    portal.adjust_min(
+                                        |min| show_block_pos_edit(ui, min),
+                                        self.lock_portal_size,
+                                        dimension,
+                                    );
+
+                                    portal.adjust_max(
+                                        |max| show_block_pos_edit(ui, max),
+                                        self.lock_portal_size,
+                                        dimension,
+                                    );
+
                                     ui.horizontal(|ui| {
-                                        ui.label("Facing");
-                                        ui.selectable_value(axis, PortalAxis::X, "X");
-                                        ui.selectable_value(axis, PortalAxis::Z, "Z");
+                                        portal.adjust_width(|w| dv_i64(ui, "Width", w));
+                                        portal
+                                            .adjust_height(|h| dv_i64(ui, "Height", h), dimension);
                                     });
                                 });
-
-                                portal.adjust_min(
-                                    |min| show_block_pos_edit(ui, min),
-                                    self.lock_portal_size,
-                                    dimension,
-                                );
-
-                                portal.adjust_max(
-                                    |max| show_block_pos_edit(ui, max),
-                                    self.lock_portal_size,
-                                    dimension,
-                                );
-
-                                ui.horizontal(|ui| {
-                                    portal.adjust_width(|w| dv_i64(ui, "Width", w));
-                                    portal.adjust_height(|h| dv_i64(ui, "Height", h), dimension);
-                                });
                             });
+
+                            match self.cached_links.get(&portal.id) {
+                                None => {
+                                    ui.colored_label(ui.visuals().warn_fg_color, "Calculating ...");
+                                }
+                                Some(PortalLinkResult::EntityWontFit) => {
+                                    ui.colored_label(
+                                        ui.visuals().error_fg_color,
+                                        "Entity won't fit",
+                                    );
+                                }
+                                Some(PortalLinkResult::Portals { ids, new_portal }) => {
+                                    if !ids.is_empty() {
+                                        let mut names = ids.iter().map(|id| {
+                                            destination_id_to_name
+                                                .get(id)
+                                                .map(|s| s.as_str())
+                                                .unwrap_or("<unknown>")
+                                        });
+                                        ui.strong(format!("Links to: {}", names.join(", ")));
+                                    }
+                                    if *new_portal {
+                                        ui.colored_label(
+                                            ui.visuals().warn_fg_color,
+                                            "Generates new portal",
+                                        );
+                                    }
+                                }
+                            }
                         });
+
+                        reorder_drag_rect.max.y = ui.min_rect().max.y;
+                        let r = ui.interact(
+                            reorder_drag_rect,
+                            egui::Id::new(portal.id).with("reorder"),
+                            egui::Sense::drag(),
+                        );
+                        let color;
+                        if r.dragged() {
+                            reorder_drag_source = Some(i);
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                            color = ui.visuals().strong_text_color();
+                        } else if r.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                            color = ui.visuals().text_color();
+                        } else {
+                            color = ui.visuals().weak_text_color();
+                        }
+                        let center = reorder_drag_rect.center();
+                        let sp = 5.0;
+                        for dx in [-sp / 2.0, sp / 2.0] {
+                            for dy in [-sp, 0.0, sp] {
+                                ui.painter()
+                                    .circle_filled(center + egui::vec2(dx, dy), 1.5, color);
+                            }
+                        }
                     });
 
-                    match self.cached_links.get(&portal.id) {
-                        None => {
-                            ui.colored_label(ui.visuals().warn_fg_color, "Calculating ...");
+                    let rect = r.response.rect.intersect(ui.clip_rect());
+                    ui.input(|input| {
+                        if rect.contains(input.pointer.interact_pos()?) {
+                            hovered_index = Some(i);
                         }
-                        Some(PortalLinkResult::EntityWontFit) => {
-                            ui.colored_label(ui.visuals().error_fg_color, "Entity won't fit");
-                        }
-                        Some(PortalLinkResult::Portals { ids, new_portal }) => {
-                            if !ids.is_empty() {
-                                let mut names = ids.iter().map(|id| {
-                                    destination_id_to_name
-                                        .get(id)
-                                        .map(|s| s.as_str())
-                                        .unwrap_or("<unknown>")
-                                });
-                                ui.strong(format!("Links to: {}", names.join(", ")));
-                            }
-                            if *new_portal {
-                                ui.colored_label(
-                                    ui.visuals().warn_fg_color,
-                                    "Generates new portal",
-                                );
-                            }
-                        }
-                    }
-                    {
-                        continue;
-                    };
+                        None::<()>
+                    });
                 }
             });
 
-        if let Some((i, j)) = reorder_swap {
-            self.world.portals[dimension].swap(i, j);
+        if let (Some(i), Some(j)) = (reorder_drag_source, hovered_index) {
+            if i < j {
+                self.world.portals[dimension][i..=j].rotate_left(1);
+            } else if i > j {
+                self.world.portals[dimension][j..=i].rotate_right(1);
+            }
         }
         if let Some(i) = remove {
             self.world.portals[dimension].remove(i);
