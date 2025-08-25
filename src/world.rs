@@ -133,11 +133,11 @@ impl WorldPortals {
             .filter(move |p| p.is_in_range_of_region(destination_region, destination_dimension))
     }
 
-    pub fn reachable_portals(
+    pub fn portal_destinations(
         &self,
         destination_dimension: Dimension,
         destination_region: BlockRegion,
-    ) -> ReachablePortals<'_> {
+    ) -> PortalDestinations<'_> {
         let candidates = &self[destination_dimension];
 
         let mut confirmed_reachable = vec![false; candidates.len()];
@@ -155,7 +155,7 @@ impl WorldPortals {
             &mut steps,
         );
 
-        ReachablePortals {
+        PortalDestinations {
             existing_portals: confirmed_reachable
                 .iter()
                 .positions(|b| *b)
@@ -305,7 +305,7 @@ fn minima_by_opt_key<I: IntoIterator, C: Ord>(
     ret
 }
 
-pub struct ReachablePortals<'a> {
+pub struct PortalDestinations<'a> {
     pub existing_portals: Vec<&'a Portal>,
     pub new_portal: bool,
 }

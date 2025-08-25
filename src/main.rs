@@ -1,8 +1,11 @@
+use std::collections::HashMap;
+
 use egui::Widget;
 use egui::emath::GuiRounding;
 
 mod camera;
 mod entity;
+mod id;
 mod portal;
 mod pos;
 mod region;
@@ -13,6 +16,7 @@ pub use Dimension::{Nether, Overworld};
 pub use camera::{Camera, Plane};
 use egui_plot::PlotPoint;
 pub use entity::Entity;
+pub use id::PortalId;
 use itertools::Itertools;
 pub use portal::{Direction, Portal, PortalAxis};
 pub use pos::{Axis, BlockPos, WorldPos};
@@ -33,6 +37,9 @@ pub const CMD_Y: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y);
 
 fn main() -> eframe::Result {
+    env_logger::builder()
+        .filter_module("portal_tool", log::LevelFilter::Debug)
+        .init();
     eframe::run_native(
         "Portal Tool",
         eframe::NativeOptions::default(),
@@ -47,10 +54,13 @@ pub struct App {
     dimension: Dimension,
     lock_portal_size: bool,
     entity: Entity,
+    last_calculated_entity: Entity,
 
     last_saved_state: World,
     undo_history: Vec<World>,
     redo_history: Vec<World>,
+
+    cached_links: HashMap<PortalId, PortalLinkResult>,
 }
 
 impl App {
@@ -72,10 +82,13 @@ impl App {
 
             dimension: Overworld,
             lock_portal_size: true,
+            last_calculated_entity: Entity::default(),
 
             last_saved_state,
             undo_history: vec![],
             redo_history: vec![],
+
+            cached_links: HashMap::new(), // will be recomputed on first frame
         }
     }
 
@@ -178,6 +191,11 @@ impl App {
             }
         }
 
+        let destination_id_to_name = self.world.portals[dimension.other()]
+            .iter()
+            .map(|p| (p.id, p.name.clone()))
+            .collect::<HashMap<PortalId, String>>();
+
         ui.separator();
 
         let mut reorder_swap = None;
@@ -192,91 +210,89 @@ impl App {
                         ui.separator();
                     }
 
-                    let mut collapsing =
-                        egui::collapsing_header::CollapsingState::load_with_default_open(
-                            ui.ctx(),
-                            egui::Id::new((dimension, i)),
-                            false,
-                        );
-                    collapsing.set_open(portal.is_open);
-                    let r = collapsing
-                        .show_header(ui, |ui| {
-                            egui::TextEdit::singleline(&mut portal.name)
-                                .hint_text("Portal name")
-                                .show(ui);
-                        })
-                        .body(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.vertical(|ui| {
-                                    if ui.button("🗑").clicked() {
-                                        remove = Some(i);
-                                    }
+                    egui::collapsing_header::CollapsingState::load_with_default_open(
+                        ui.ctx(),
+                        egui::Id::new(portal.id),
+                        false,
+                    )
+                    .show_header(ui, |ui| {
+                        egui::TextEdit::singleline(&mut portal.name)
+                            .hint_text("Portal name")
+                            .show(ui);
+                    })
+                    .body(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                if ui.button("🗑").clicked() {
+                                    remove = Some(i);
+                                }
 
-                                    if ui.add_visible(i > 0, egui::Button::new("⬆")).clicked() {
-                                        reorder_swap = Some((i, i - 1));
-                                    }
-                                    let end = list_len - 1;
-                                    if ui.add_visible(i < end, egui::Button::new("⬇")).clicked() {
-                                        reorder_swap = Some((i, i + 1));
-                                    }
+                                if ui.add_visible(i > 0, egui::Button::new("⬆")).clicked() {
+                                    reorder_swap = Some((i, i - 1));
+                                }
+                                let end = list_len - 1;
+                                if ui.add_visible(i < end, egui::Button::new("⬇")).clicked() {
+                                    reorder_swap = Some((i, i + 1));
+                                }
+                            });
+
+                            ui.vertical(|ui| {
+                                portal.adjust_axis(|axis| {
+                                    ui.horizontal(|ui| {
+                                        ui.label("Facing");
+                                        ui.selectable_value(axis, PortalAxis::X, "X");
+                                        ui.selectable_value(axis, PortalAxis::Z, "Z");
+                                    });
                                 });
 
-                                ui.vertical(|ui| {
-                                    portal.adjust_axis(|axis| {
-                                        ui.horizontal(|ui| {
-                                            ui.label("Facing");
-                                            ui.selectable_value(axis, PortalAxis::X, "X");
-                                            ui.selectable_value(axis, PortalAxis::Z, "Z");
-                                        });
-                                    });
+                                portal.adjust_min(
+                                    |min| show_block_pos_edit(ui, min),
+                                    self.lock_portal_size,
+                                    dimension,
+                                );
 
-                                    portal.adjust_min(
-                                        |min| show_block_pos_edit(ui, min),
-                                        self.lock_portal_size,
-                                        dimension,
-                                    );
+                                portal.adjust_max(
+                                    |max| show_block_pos_edit(ui, max),
+                                    self.lock_portal_size,
+                                    dimension,
+                                );
 
-                                    portal.adjust_max(
-                                        |max| show_block_pos_edit(ui, max),
-                                        self.lock_portal_size,
-                                        dimension,
-                                    );
-
-                                    ui.horizontal(|ui| {
-                                        portal.adjust_width(|w| dv_i64(ui, "Width", w));
-                                        portal
-                                            .adjust_height(|h| dv_i64(ui, "Height", h), dimension);
-                                    });
+                                ui.horizontal(|ui| {
+                                    portal.adjust_width(|w| dv_i64(ui, "Width", w));
+                                    portal.adjust_height(|h| dv_i64(ui, "Height", h), dimension);
                                 });
                             });
                         });
-                    portal.is_open ^= r.0.clicked();
+                    });
 
-                    let destination_dimension = dimension.other();
-                    let Some(entry_region) = portal.entity_collision_region(self.entity) else {
-                        ui.colored_label(ui.visuals().error_fg_color, "Entity won't fit");
+                    match self.cached_links.get(&portal.id) {
+                        None => {
+                            ui.colored_label(ui.visuals().warn_fg_color, "Calculating ...");
+                        }
+                        Some(PortalLinkResult::EntityWontFit) => {
+                            ui.colored_label(ui.visuals().error_fg_color, "Entity won't fit");
+                        }
+                        Some(PortalLinkResult::Portals { ids, new_portal }) => {
+                            if !ids.is_empty() {
+                                let mut names = ids.iter().map(|id| {
+                                    destination_id_to_name
+                                        .get(id)
+                                        .map(|s| s.as_str())
+                                        .unwrap_or("<unknown>")
+                                });
+                                ui.strong(format!("Links to: {}", names.join(", ")));
+                            }
+                            if *new_portal {
+                                ui.colored_label(
+                                    ui.visuals().warn_fg_color,
+                                    "Generates new portal",
+                                );
+                            }
+                        }
+                    }
+                    {
                         continue;
                     };
-                    let destination_region =
-                        entry_region.convert_dimension(dimension, destination_dimension);
-
-                    let reachable = self.last_saved_state.portals.reachable_portals(
-                        destination_dimension,
-                        destination_region.block_region_containing(),
-                    );
-                    if !reachable.existing_portals.is_empty() {
-                        ui.strong(format!(
-                            "Links to: {}",
-                            reachable
-                                .existing_portals
-                                .iter()
-                                .map(|p| p.display_name())
-                                .join(", "),
-                        ));
-                    }
-                    if reachable.new_portal {
-                        ui.colored_label(ui.visuals().warn_fg_color, "Generates new portal");
-                    }
                 }
             });
 
@@ -452,6 +468,33 @@ impl App {
             ));
         }
     }
+
+    fn portal_link_result(&self, portal: &Portal, portal_dimension: Dimension) -> PortalLinkResult {
+        let destination_dimension = portal_dimension.other();
+        let Some(entry_region) = portal.entity_collision_region(self.entity) else {
+            return PortalLinkResult::EntityWontFit;
+        };
+        let destination_region =
+            entry_region.convert_dimension(portal_dimension, destination_dimension);
+        let destinations = self.world.portals.portal_destinations(
+            destination_dimension,
+            destination_region.block_region_containing(),
+        );
+        PortalLinkResult::Portals {
+            ids: destinations.existing_portals.iter().map(|p| p.id).collect(),
+            new_portal: destinations.new_portal,
+        }
+    }
+
+    fn recalculate_portal_links(&mut self) {
+        self.cached_links.clear();
+        for portal_dimension in [Dimension::Overworld, Dimension::Nether] {
+            for portal in &self.world.portals[portal_dimension] {
+                self.cached_links
+                    .insert(portal.id, self.portal_link_result(portal, portal_dimension));
+            }
+        }
+    }
 }
 
 impl eframe::App for App {
@@ -468,6 +511,8 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
+        let mut must_recalculate_portal_links = false;
+
         egui::CentralPanel::default().show(ctx, |ui| {
             let mut new_camera = self.camera;
 
@@ -507,6 +552,7 @@ impl eframe::App for App {
                         self.redo_history.clear();
                         self.undo_history.push(state_to_save);
                         self.save_to_file();
+                        must_recalculate_portal_links = true;
                     }
 
                     // Consume the most specific shortcut first
@@ -520,6 +566,17 @@ impl eframe::App for App {
                 }
             })
         });
+
+        if self.last_calculated_entity != self.entity {
+            self.last_calculated_entity = self.entity;
+            must_recalculate_portal_links = true;
+        }
+
+        if must_recalculate_portal_links {
+            let t = std::time::Instant::now();
+            self.recalculate_portal_links();
+            log::debug!("Recalculated portal links in {:?}", t.elapsed());
+        }
     }
 }
 
@@ -579,4 +636,12 @@ fn coordinate_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let r = ui.label(text);
     ui.add_space(-ui.spacing().item_spacing.x * 0.5);
     r
+}
+
+enum PortalLinkResult {
+    EntityWontFit,
+    Portals {
+        ids: Vec<PortalId>,
+        new_portal: bool,
+    },
 }

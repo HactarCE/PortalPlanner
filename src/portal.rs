@@ -1,7 +1,7 @@
 use egui::NumExt;
 use serde::{Deserialize, Serialize};
 
-use crate::{Axis, BlockPos, BlockRegion, Dimension, Entity, WorldRegion};
+use crate::{Axis, BlockPos, BlockRegion, Dimension, Entity, PortalId, WorldRegion};
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Direction {
@@ -35,12 +35,13 @@ impl PortalAxis {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Portal {
+    #[serde(skip, default = "PortalId::new")]
+    pub id: PortalId,
+
+    /// Human-friendly name of the portal.
     pub name: String,
     pub region: BlockRegion,
     pub axis: PortalAxis,
-
-    #[serde(skip, default)]
-    pub(crate) is_open: bool,
 }
 
 impl Portal {
@@ -80,6 +81,8 @@ impl Portal {
 
     pub fn new_minimal(pos: BlockPos, axis: PortalAxis) -> Self {
         Self {
+            id: PortalId::new(),
+
             name: String::new(),
             region: BlockRegion {
                 min: BlockPos {
@@ -94,7 +97,6 @@ impl Portal {
                 },
             },
             axis,
-            is_open: false,
         }
     }
 
