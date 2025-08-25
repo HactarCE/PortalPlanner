@@ -34,8 +34,8 @@ impl Default for Camera {
                 y: 64.0,
                 z: 0.0,
             },
-            width: 100.0,
-            height: 100.0,
+            width: 1024.0,
+            height: 1024.0,
         }
     }
 }

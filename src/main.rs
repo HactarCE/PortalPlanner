@@ -141,8 +141,10 @@ impl App {
                 ui.selectable_value(&mut new_camera_dimension, dim, dim.to_string());
             }
             if new_camera_dimension != self.camera.dimension {
-                self.animation_state.width_scale *=
-                    self.camera.dimension.scale() / new_camera_dimension.scale();
+                let scale_factor = self.camera.dimension.scale() / new_camera_dimension.scale();
+                self.animation_state.aspect_ratio_scale /= scale_factor;
+                self.camera.width *= scale_factor;
+                self.camera.height *= scale_factor;
             }
             self.camera.set_dimension(new_camera_dimension);
 
@@ -401,10 +403,11 @@ impl App {
         plane: Plane,
         new_camera: &mut Camera,
     ) -> egui::Response {
-        let width_scale = self.animation_state.width_scale;
+        let aspect_ratio_scale = self.animation_state.aspect_ratio_scale;
+        let width_scale = 1.0;
         let height_scale = match plane {
-            Plane::XY | Plane::ZY => 1.0,
-            Plane::XZ => width_scale,
+            Plane::XY | Plane::ZY => aspect_ratio_scale,
+            Plane::XZ => 1.0,
         };
 
         let mut plot = egui_plot::Plot::new(plane)
@@ -419,7 +422,7 @@ impl App {
             .x_grid_spacer(egui_plot::log_grid_spacer(8))
             .y_grid_spacer(egui_plot::log_grid_spacer(8))
             .data_aspect(match plane {
-                Plane::XY | Plane::ZY => width_scale as f32,
+                Plane::XY | Plane::ZY => aspect_ratio_scale.recip() as f32,
                 Plane::XZ => 1.0,
             })
             .x_axis_formatter(|mark, _range| mark.value.to_string())
@@ -625,12 +628,12 @@ impl eframe::App for App {
             }
             self.camera = new_camera;
             let now = std::time::Instant::now();
+            if !self.animation_state.is_static() {
+                ctx.request_repaint();
+            }
             self.animation_state
                 .step((now - self.animation_state.last_frame).as_secs_f64());
             self.animation_state.last_frame = now;
-            if self.animation_state.width_scale != 1.0 {
-                ctx.request_repaint();
-            }
 
             ui.scope_builder(egui::UiBuilder::new().max_rect(right_top), |ui| {
                 egui::ScrollArea::horizontal()
@@ -769,21 +772,25 @@ fn show_link_result(
 #[derive(Debug, Copy, Clone, PartialEq)]
 struct AnimationState {
     last_frame: std::time::Instant,
-    width_scale: f64,
+    aspect_ratio_scale: f64,
 }
 impl Default for AnimationState {
     fn default() -> Self {
         Self {
             last_frame: std::time::Instant::now(),
-            width_scale: 1.0,
+            aspect_ratio_scale: 1.0,
         }
     }
 }
 impl AnimationState {
     fn step(&mut self, dt: f64) {
-        self.width_scale = self.width_scale.powf(1.0 - dt * ANIMATION_SPEED);
-        if self.width_scale.log2().abs() < 0.0025 {
-            self.width_scale = 1.0;
+        self.aspect_ratio_scale = self.aspect_ratio_scale.powf(1.0 - dt * ANIMATION_SPEED);
+        if self.aspect_ratio_scale.log2().abs() < 0.0025 {
+            self.aspect_ratio_scale = 1.0;
         }
+    }
+
+    fn is_static(&self) -> bool {
+        self.aspect_ratio_scale == 1.0
     }
 }
