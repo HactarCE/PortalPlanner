@@ -87,12 +87,19 @@ pub struct World {
 }
 
 /// Portals in a Minecraft world.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Default, Clone, PartialEq, Eq)]
+#[cfg_attr(not(test), derive(Debug))]
 pub struct WorldPortals {
     /// Portals in the overworld.
     pub overworld: Vec<Portal>,
     /// Portals in the nether.
     pub nether: Vec<Portal>,
+}
+#[cfg(test)]
+impl fmt::Debug for WorldPortals {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", serde_json::to_string_pretty(self).unwrap())
+    }
 }
 
 impl Index<Dimension> for WorldPortals {
@@ -143,20 +150,6 @@ impl WorldPortals {
         destination_dimension: Dimension,
         destination_region: BlockRegion,
     ) -> PortalDestinations<'_> {
-        // let portals_in_range: Vec<_> = self
-        //     .portals_in_range(destination_dimension, dbg!(destination_region))
-        //     .collect();
-
-        // let smallest_max_distance = portals_in_range
-        //     .iter()
-        //     .map(|p| destination_region.max_euclidean_distance_sq_to(p.region))
-        //     .min()
-        //     .unwrap_or(0);
-
-        // let candidates = portals_in_range.into_iter().filter(move |p| {
-        //     destination_region.min_euclidean_distance_sq_to(p.region) <= smallest_max_distance
-        // });
-
         let candidates = &self[destination_dimension];
 
         let mut candidates_in_range = vec![false; candidates.len()];
@@ -164,13 +157,8 @@ impl WorldPortals {
         let mut distances = vec![0; candidates.len()]; // buffer for reuse
         let mut new_portal = false;
         for point in destination_region.iter() {
-            if point.z > 128 {
-                dbg!(point);
-            }
             for i in 0..candidates.len() {
-                distances[i] = if candidates[i]
-                    .is_in_range_of_region(destination_region, destination_dimension)
-                {
+                distances[i] = if candidates[i].is_in_range_of_point(point, destination_dimension) {
                     candidates[i]
                         .region
                         .min_euclidean_distance_sq_to_point(point)
@@ -249,12 +237,16 @@ fn mark_reachable_portals(
         candidates[p].is_in_range_of_region(destination_region, destination_dimension)
     });
 
-    // Filter for portals that are not strictly farther than another portal
+    // Filter for portals that are not strictly farther than another
+    // always-in-range portal
     let smallest_max_distance = candidates_that_might_be_reachable
         .iter()
+        .filter(|&&p| {
+            candidates[p].is_always_in_range_of_region(destination_region, destination_dimension)
+        })
         .map(|&p| destination_region.max_euclidean_distance_sq_to(candidates[p].region))
         .min()
-        .unwrap_or(0);
+        .unwrap_or(i64::MAX);
     candidates_that_might_be_reachable.retain(|&mut p| {
         destination_region.min_euclidean_distance_sq_to(candidates[p].region)
             <= smallest_max_distance
@@ -272,7 +264,6 @@ fn mark_reachable_portals(
                 })
         })
     });
-
     *may_generate_new_portal |= closest_at_each_corner
         .iter()
         .any(|closest_at_corner| closest_at_corner.is_empty());
@@ -390,7 +381,9 @@ pub struct PortalDestinations<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::Entity;
+    use proptest::prelude::*;
+
+    use crate::{Entity, PortalAxis};
 
     use super::*;
 
@@ -434,5 +427,75 @@ mod tests {
             .portals
             .portal_destinations(Dimension::Overworld, destination_region);
         assert_eq!(expected, actual);
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_portal_linking(portals in random_portals()) {
+            test_portal_linking(portals);
+        }
+    }
+
+    fn test_portal_linking(portals: WorldPortals) {
+        for source_dimension in [Dimension::Overworld, Dimension::Nether] {
+            let destination_dimension = source_dimension.other();
+            for portal in &portals[source_dimension] {
+                let destination_region = portal
+                    .destination_region(Entity::PLAYER, destination_dimension)
+                    .unwrap(); // valid portals always fit players
+                let expected =
+                    portals.portal_destinations_naive(destination_dimension, destination_region);
+                let actual = portals.portal_destinations(destination_dimension, destination_region);
+                assert_eq!(expected.new_portal, actual.new_portal);
+                assert_eq!(
+                    expected
+                        .existing_portals
+                        .iter()
+                        .map(|p| p.id)
+                        .sorted()
+                        .collect_vec(),
+                    actual
+                        .existing_portals
+                        .iter()
+                        .map(|p| p.id)
+                        .sorted()
+                        .collect_vec(),
+                );
+            }
+        }
+    }
+
+    fn random_portals() -> impl Strategy<Value = WorldPortals> {
+        (
+            prop::collection::vec(random_portal(Dimension::Overworld), 0..=10),
+            prop::collection::vec(random_portal(Dimension::Nether), 0..=10),
+        )
+            .prop_map(|(overworld, nether)| WorldPortals { overworld, nether })
+    }
+
+    fn random_portal(dimension: Dimension) -> impl Strategy<Value = Portal> {
+        // The naive algorithm is slow for nether->overworld travel, so we limit
+        // the size of portals in the nether for performance.
+        let max_width: i64 = match dimension {
+            Dimension::Overworld => 21, // max allowed in-game
+            Dimension::Nether => 4,
+        };
+        let max_height: i64 = match dimension {
+            Dimension::Overworld => 21, // max allowed in-game
+            Dimension::Nether => 5,
+        };
+        let max_coordinate = (100 as f64 / dimension.scale()) as i64;
+        let x = -max_coordinate..=max_coordinate;
+        let y = dimension.y_min()..=(dimension.y_max() - 10);
+        let z = -max_coordinate..=max_coordinate;
+        let w = 2..=max_width;
+        let h = 3..=max_height;
+        let axis = prop_oneof![Just(PortalAxis::X), Just(PortalAxis::Z)];
+        (x, y, z, w, h, axis).prop_map(move |(x, y, z, width, height, axis)| {
+            let mut p = Portal::new_minimal([x, y, z].into(), axis, dimension);
+            p.adjust_width(|w| *w = width);
+            p.adjust_height(|h| *h = height, dimension);
+            p
+        })
     }
 }

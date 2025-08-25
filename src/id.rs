@@ -6,7 +6,7 @@ static COUNTER: AtomicU64 = AtomicU64::new(1);
 /// Monotonically-increasing unique ID.
 ///
 /// ID 0 is reserved.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PortalId(u64);
 
 impl fmt::Display for PortalId {

@@ -78,7 +78,7 @@ impl BlockRegion {
             self.min.y..=self.max.y,
             self.min.x..=self.max.x,
         )
-        .map(|(x, y, z)| BlockPos { x, y, z })
+        .map(|(z, y, x)| BlockPos { x, y, z })
     }
 
     fn is_valid_on_axis(self, axis: Axis) -> bool {

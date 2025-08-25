@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Axis, BlockPos, BlockRegion, ConvertDimension, Dimension, Entity, PortalId, WorldRegion,
+    util::max_range_distance_to,
 };
 
 /// Horizontal axis perpendicular to a portal's surface.
@@ -266,10 +267,10 @@ impl Portal {
         self.region.max.y = self.region.min.y.saturating_add(height - 1);
         if self.region.max.y > dimension.y_max() - 1 {
             let excess = self.region.max.y - (dimension.y_max() - 1);
-            self.region.max.x -= excess;
-            self.region.min.x -= excess;
-            if self.region.min.x < dimension.y_min() + 1 {
-                self.region.min.x = dimension.y_min() + 1;
+            self.region.max.y -= excess;
+            self.region.min.y -= excess;
+            if self.region.min.y < dimension.y_min() + 1 {
+                self.region.min.y = dimension.y_min() + 1;
             }
         }
         r
@@ -297,15 +298,16 @@ impl Portal {
         r
     }
 
-    /// Returns whether the portal is within the portal search range for `pos`.
+    /// Returns whether `self` is within the portal search range for `pos`.
     pub fn is_in_range_of_point(&self, pos: BlockPos, dimension: Dimension) -> bool {
         // Ignore Y axis
         let r = dimension.portal_search_range();
-        (self.region.min.x - pos.x).abs() <= r && (self.region.min.z - pos.z).abs() <= r
+        ((self.region.min.x - r)..=(self.region.max.x + r)).contains(&pos.x)
+            && ((self.region.min.z - r)..=(self.region.max.z + r)).contains(&pos.z)
     }
 
-    /// Returns whether the portal is within the portal search range for any
-    /// point in `region`.
+    /// Returns whether `self` is within the portal search range for **any** point
+    /// in `region`.
     pub fn is_in_range_of_region(&self, region: BlockRegion, dimension: Dimension) -> bool {
         // Ignore Y axis
         let r = dimension.portal_search_range();
@@ -313,5 +315,19 @@ impl Portal {
             && self.region.min.z <= region.max.z + r
             && self.region.max.x >= region.min.x - r
             && self.region.max.z >= region.min.z - r
+    }
+    /// Returns whether `self` is within the portal search range for **all**
+    /// points in `region`.
+    pub fn is_always_in_range_of_region(&self, region: BlockRegion, dimension: Dimension) -> bool {
+        // Ignore Y axis
+        let r = dimension.portal_search_range();
+        max_range_distance_to(
+            region.min.x..=region.max.x,
+            self.region.min.x..=self.region.max.x,
+        ) <= r
+            && max_range_distance_to(
+                region.min.z..=region.max.z,
+                self.region.min.z..=self.region.max.z,
+            ) <= r
     }
 }
