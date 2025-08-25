@@ -192,79 +192,91 @@ impl App {
                         ui.separator();
                     }
 
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            if ui.button("🗑").clicked() {
-                                remove = Some(i);
-                            }
-
-                            if ui.add_visible(i > 0, egui::Button::new("⬆")).clicked() {
-                                reorder_swap = Some((i, i - 1));
-                            }
-                            let end = list_len - 1;
-                            if ui.add_visible(i < end, egui::Button::new("⬇")).clicked() {
-                                reorder_swap = Some((i, i + 1));
-                            }
-                        });
-
-                        ui.vertical(|ui| {
+                    let mut collapsing =
+                        egui::collapsing_header::CollapsingState::load_with_default_open(
+                            ui.ctx(),
+                            egui::Id::new((dimension, i)),
+                            false,
+                        );
+                    collapsing.set_open(portal.is_open);
+                    let r = collapsing
+                        .show_header(ui, |ui| {
                             egui::TextEdit::singleline(&mut portal.name)
                                 .hint_text("Portal name")
                                 .show(ui);
+                        })
+                        .body(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    if ui.button("🗑").clicked() {
+                                        remove = Some(i);
+                                    }
 
-                            portal.adjust_axis(|axis| {
-                                ui.horizontal(|ui| {
-                                    ui.label("Facing");
-                                    ui.selectable_value(axis, PortalAxis::X, "X");
-                                    ui.selectable_value(axis, PortalAxis::Z, "Z");
+                                    if ui.add_visible(i > 0, egui::Button::new("⬆")).clicked() {
+                                        reorder_swap = Some((i, i - 1));
+                                    }
+                                    let end = list_len - 1;
+                                    if ui.add_visible(i < end, egui::Button::new("⬇")).clicked() {
+                                        reorder_swap = Some((i, i + 1));
+                                    }
+                                });
+
+                                ui.vertical(|ui| {
+                                    portal.adjust_axis(|axis| {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Facing");
+                                            ui.selectable_value(axis, PortalAxis::X, "X");
+                                            ui.selectable_value(axis, PortalAxis::Z, "Z");
+                                        });
+                                    });
+
+                                    portal.adjust_min(
+                                        |min| show_block_pos_edit(ui, min),
+                                        self.lock_portal_size,
+                                        dimension,
+                                    );
+
+                                    portal.adjust_max(
+                                        |max| show_block_pos_edit(ui, max),
+                                        self.lock_portal_size,
+                                        dimension,
+                                    );
+
+                                    ui.horizontal(|ui| {
+                                        portal.adjust_width(|w| dv_i64(ui, "Width", w));
+                                        portal
+                                            .adjust_height(|h| dv_i64(ui, "Height", h), dimension);
+                                    });
                                 });
                             });
-
-                            portal.adjust_min(
-                                |min| show_block_pos_edit(ui, min),
-                                self.lock_portal_size,
-                                dimension,
-                            );
-
-                            portal.adjust_max(
-                                |max| show_block_pos_edit(ui, max),
-                                self.lock_portal_size,
-                                dimension,
-                            );
-
-                            ui.horizontal(|ui| {
-                                portal.adjust_width(|w| dv_i64(ui, "Width", w));
-                                portal.adjust_height(|h| dv_i64(ui, "Height", h), dimension);
-                            });
-
-                            let destination_dimension = dimension.other();
-                            let Some(entry_region) = portal.entity_collision_region(self.entity)
-                            else {
-                                ui.small("Entity won't fit");
-                                return;
-                            };
-                            let destination_region =
-                                entry_region.convert_dimension(dimension, destination_dimension);
-
-                            let reachable = self.last_saved_state.portals.reachable_portals(
-                                destination_dimension,
-                                destination_region.block_region_containing(),
-                            );
-                            if !reachable.existing_portals.is_empty() {
-                                ui.small(format!(
-                                    "Links to {}",
-                                    reachable
-                                        .existing_portals
-                                        .iter()
-                                        .map(|p| p.display_name())
-                                        .join(", "),
-                                ));
-                            }
-                            if reachable.new_portal {
-                                ui.small("Generates new portal");
-                            }
                         });
-                    });
+                    portal.is_open ^= r.0.clicked();
+
+                    let destination_dimension = dimension.other();
+                    let Some(entry_region) = portal.entity_collision_region(self.entity) else {
+                        ui.colored_label(ui.visuals().error_fg_color, "Entity won't fit");
+                        continue;
+                    };
+                    let destination_region =
+                        entry_region.convert_dimension(dimension, destination_dimension);
+
+                    let reachable = self.last_saved_state.portals.reachable_portals(
+                        destination_dimension,
+                        destination_region.block_region_containing(),
+                    );
+                    if !reachable.existing_portals.is_empty() {
+                        ui.strong(format!(
+                            "Links to: {}",
+                            reachable
+                                .existing_portals
+                                .iter()
+                                .map(|p| p.display_name())
+                                .join(", "),
+                        ));
+                    }
+                    if reachable.new_portal {
+                        ui.colored_label(ui.visuals().warn_fg_color, "Generates new portal");
+                    }
                 }
             });
 
@@ -324,7 +336,7 @@ impl App {
                     };
                     let pos = WorldPos { x, y, z };
                     format!(
-                        "Overworld: {overworld:.03}\n   Nether: {nether:.03}",
+                        "Overworld: {overworld:10.03}\n   Nether: {nether:10.03}",
                         overworld = pos.convert_dimension(dimension, Overworld),
                         nether = pos.convert_dimension(dimension, Nether),
                     )

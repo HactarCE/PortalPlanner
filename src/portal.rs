@@ -38,6 +38,9 @@ pub struct Portal {
     pub name: String,
     pub region: BlockRegion,
     pub axis: PortalAxis,
+
+    #[serde(skip, default)]
+    pub(crate) is_open: bool,
 }
 
 impl Portal {
@@ -91,6 +94,7 @@ impl Portal {
                 },
             },
             axis,
+            is_open: false,
         }
     }
 
