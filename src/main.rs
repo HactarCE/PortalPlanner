@@ -19,7 +19,6 @@ pub use camera::{Camera, Plane};
 use egui_plot::PlotPoint;
 pub use entity::Entity;
 pub use id::PortalId;
-use itertools::Itertools;
 pub use portal::{Portal, PortalAxis};
 pub use pos::{Axis, BlockPos, WorldPos};
 pub use region::{BlockRegion, WorldRegion};
@@ -73,7 +72,7 @@ pub struct App {
     redo_history: Vec<World>,
 
     cached_state: (World, Entity),
-    cached_links: HashMap<PortalId, PortalLinkResult>,
+    cached_links: HashMap<PortalId, (PortalLinkResult, Vec<PortalId>)>,
 }
 
 impl App {
@@ -209,7 +208,7 @@ impl App {
             }
         }
 
-        let destinations_by_id = self.last_saved_state.portals[dimension.other()]
+        let portals_by_id = self.last_saved_state.portals[dimension.other()]
             .iter()
             .map(|p| (p.id, p))
             .collect::<HashMap<PortalId, &Portal>>();
@@ -288,11 +287,7 @@ impl App {
                                 });
                             });
 
-                            show_link_result(
-                                ui,
-                                self.cached_links.get(&portal.id),
-                                &destinations_by_id,
-                            );
+                            show_link_result(ui, self.cached_links.get(&portal.id), &portals_by_id);
 
                             // ui.small_button("Calculate naively (expensive)")
                             //     .on_hover_ui(|ui| {
@@ -575,12 +570,31 @@ impl App {
 
     fn recalculate_portal_links(&mut self) {
         self.cached_links.clear();
+
+        // Add outgoing connections
         for portal_dimension in [Overworld, Nether] {
             for portal in &self.world.portals[portal_dimension] {
                 self.cached_links.insert(
                     portal.id,
-                    self.calculate_portal_link_result(portal, portal_dimension),
+                    (
+                        self.calculate_portal_link_result(portal, portal_dimension),
+                        vec![],
+                    ),
                 );
+            }
+        }
+
+        // Add incoming connections
+        for (id, (outgoing, _)) in self.cached_links.clone() {
+            if let PortalLinkResult::Portals { ids, new_portal: _ } = outgoing {
+                for destination_id in ids {
+                    match self.cached_links.get_mut(&destination_id) {
+                        Some((_, incoming)) => incoming.push(id),
+                        None => {
+                            log::error!("missing destination portal with id {destination_id}")
+                        }
+                    }
+                }
             }
         }
     }
@@ -728,6 +742,7 @@ fn coordinate_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
     r
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum PortalLinkResult {
     EntityWontFit,
     Portals {
@@ -738,41 +753,58 @@ enum PortalLinkResult {
 
 fn show_link_result(
     ui: &mut egui::Ui,
-    result: Option<&PortalLinkResult>,
-    destinations_by_id: &HashMap<PortalId, &Portal>,
+    result: Option<&(PortalLinkResult, Vec<PortalId>)>,
+    portals_by_id: &HashMap<PortalId, &Portal>,
 ) {
-    match result {
-        None => {
-            ui.colored_label(ui.visuals().warn_fg_color, "Calculating ...");
-        }
-        Some(PortalLinkResult::EntityWontFit) => {
+    let Some((outgoing, incoming)) = result else {
+        ui.colored_label(ui.visuals().warn_fg_color, "Calculating ...");
+        return;
+    };
+
+    match outgoing {
+        PortalLinkResult::EntityWontFit => {
             ui.colored_label(ui.visuals().error_fg_color, "Entity won't fit");
         }
-        Some(PortalLinkResult::Portals { ids, new_portal }) => {
+        PortalLinkResult::Portals { ids, new_portal } => {
             if !ids.is_empty() {
                 let mut label_atoms = egui::Atoms::new("Links to: ");
-                let mut is_first = true;
-                for id in ids {
-                    if is_first {
-                        is_first = false;
-                    } else {
-                        label_atoms.push_right(", ");
-                    }
-                    let (name, color) = match destinations_by_id.get(id) {
-                        Some(p) => {
-                            let [r, g, b] = p.color;
-                            (p.display_name(), egui::Color32::from_rgb(r, g, b))
-                        }
-                        None => ("<unknown>", ui.visuals().weak_text_color()),
-                    };
-                    label_atoms.push_right(egui::RichText::new(name).color(color));
-                }
+                push_portal_list_text(ui, &mut label_atoms, ids, portals_by_id);
                 ui.add(egui::AtomLayout::new(label_atoms));
             }
             if *new_portal {
                 ui.colored_label(ui.visuals().error_fg_color, "Generates new portal");
             }
         }
+    }
+
+    if !incoming.is_empty() {
+        let mut label_atoms = egui::Atoms::new("Links from: ");
+        push_portal_list_text(ui, &mut label_atoms, incoming, portals_by_id);
+        ui.add(egui::AtomLayout::new(label_atoms));
+    }
+}
+
+fn push_portal_list_text(
+    ui: &egui::Ui,
+    atoms: &mut egui::Atoms<'_>,
+    portal_ids: &[PortalId],
+    portals_by_id: &HashMap<PortalId, &Portal>,
+) {
+    let mut is_first = true;
+    for id in portal_ids {
+        if is_first {
+            is_first = false;
+        } else {
+            atoms.push_right(", ");
+        }
+        let (name, color) = match portals_by_id.get(id) {
+            Some(p) => {
+                let [r, g, b] = p.color;
+                (p.display_name(), egui::Color32::from_rgb(r, g, b))
+            }
+            None => ("<unknown>", ui.visuals().weak_text_color()),
+        };
+        atoms.push_right(egui::RichText::new(name).color(color));
     }
 }
 
