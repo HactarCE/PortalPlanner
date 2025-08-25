@@ -1,7 +1,9 @@
 use egui::NumExt;
 use serde::{Deserialize, Serialize};
 
-use crate::{Axis, BlockPos, BlockRegion, Dimension, Entity, PortalId, WorldRegion};
+use crate::{
+    Axis, BlockPos, BlockRegion, ConvertDimension, Dimension, Entity, PortalId, WorldRegion,
+};
 
 /// Horizontal axis perpendicular to a portal's surface.
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -37,9 +39,12 @@ pub struct Portal {
     /// Unique ID for the portal.
     #[serde(skip, default = "PortalId::new")]
     pub id: PortalId,
-
     /// Human-friendly name of the portal.
+    #[serde(default)]
     pub name: String,
+    /// Color used to represent portal in the UI.
+    #[serde(default)]
+    pub color: [u8; 3],
     /// Region filled with portal blocks in the source dimension.
     pub region: BlockRegion,
     /// Portal axis (opposite from what the game says).
@@ -81,12 +86,27 @@ impl Portal {
         result.is_valid().then_some(result)
     }
 
+    /// Returns the region where an entity may try to arrive.
+    /// `destination_dimension` is the dimension the portal leads to, _not_ the
+    /// one it is in.
+    pub fn destination_region(
+        &self,
+        entity: Entity,
+        destination_dimension: Dimension,
+    ) -> Option<BlockRegion> {
+        Some(
+            self.entity_collision_region(entity)?
+                .convert_dimension(destination_dimension.other(), destination_dimension)
+                .block_region_containing(),
+        )
+    }
+
     /// Constructs a new portal at `pos` of the smallest possible size.
     pub fn new_minimal(pos: BlockPos, axis: PortalAxis, dimension: Dimension) -> Self {
         Self {
             id: PortalId::new(),
-
             name: String::new(),
+            color: [127, 127, 127],
             region: BlockRegion {
                 min: BlockPos {
                     x: pos.x,
@@ -99,6 +119,28 @@ impl Portal {
                     z: pos.z + (axis != PortalAxis::Z) as i64 * Self::MIN_DW,
                 },
             },
+            axis,
+        }
+    }
+
+    /// Constructs a portal from a region for testing. The axis is inferred from
+    /// the size, which is assumed to be a valid portal size.
+    #[cfg(test)]
+    pub fn new_test(region: impl Into<BlockRegion>) -> Self {
+        let id = PortalId::new();
+        let region: BlockRegion = region.into();
+        let axis = if region.min.x == region.max.x {
+            PortalAxis::X
+        } else if region.min.z == region.max.z {
+            PortalAxis::Z
+        } else {
+            panic!("ambiguous axis")
+        };
+        Self {
+            id,
+            name: id.to_string(),
+            color: [0; 3],
+            region,
             axis,
         }
     }

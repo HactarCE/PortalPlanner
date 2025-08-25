@@ -138,6 +138,67 @@ pub trait ConvertDimension: Sized {
 }
 
 impl WorldPortals {
+    pub(crate) fn portal_destinations_naive(
+        &self,
+        destination_dimension: Dimension,
+        destination_region: BlockRegion,
+    ) -> PortalDestinations<'_> {
+        // let portals_in_range: Vec<_> = self
+        //     .portals_in_range(destination_dimension, dbg!(destination_region))
+        //     .collect();
+
+        // let smallest_max_distance = portals_in_range
+        //     .iter()
+        //     .map(|p| destination_region.max_euclidean_distance_sq_to(p.region))
+        //     .min()
+        //     .unwrap_or(0);
+
+        // let candidates = portals_in_range.into_iter().filter(move |p| {
+        //     destination_region.min_euclidean_distance_sq_to(p.region) <= smallest_max_distance
+        // });
+
+        let candidates = &self[destination_dimension];
+
+        let mut candidates_in_range = vec![false; candidates.len()];
+
+        let mut distances = vec![0; candidates.len()]; // buffer for reuse
+        let mut new_portal = false;
+        for point in destination_region.iter() {
+            if point.z > 128 {
+                dbg!(point);
+            }
+            for i in 0..candidates.len() {
+                distances[i] = if candidates[i]
+                    .is_in_range_of_region(destination_region, destination_dimension)
+                {
+                    candidates[i]
+                        .region
+                        .min_euclidean_distance_sq_to_point(point)
+                } else {
+                    i64::MAX
+                };
+            }
+            let min_distance = distances.iter().copied().min().unwrap_or(i64::MAX);
+            if min_distance == i64::MAX {
+                new_portal = true;
+            } else {
+                for (i, &distance) in distances.iter().enumerate() {
+                    candidates_in_range[i] |= distance == min_distance;
+                }
+            }
+        }
+
+        let existing_portals = std::iter::zip(candidates, candidates_in_range)
+            .filter(|(_, in_range)| *in_range)
+            .map(|(p, _)| p)
+            .collect();
+
+        PortalDestinations {
+            existing_portals,
+            new_portal,
+        }
+    }
+
     /// Returns the set of portals that are reachable from `destination_region`.
     pub fn portal_destinations(
         &self,
@@ -229,6 +290,15 @@ fn mark_reachable_portals(
         return; // done! confirmed reachability for all
     }
 
+    log::trace!(
+        "in region [{dx}, {dy}, {dz}]",
+        dx = destination_region.max.x - destination_region.min.x,
+        dy = destination_region.max.y - destination_region.min.y,
+        dz = destination_region.max.z - destination_region.min.z,
+    );
+    log::trace!("candidates are {candidates_that_might_be_reachable:?}");
+    log::trace!("closest at each corner is {closest_at_each_corner:?}");
+
     // Split along an axis that has a difference.
     let axes_to_split_along = Axis::ALL.map(|axis| {
         let should_split_along_axis = (0..8).any(|corner1| {
@@ -236,6 +306,7 @@ fn mark_reachable_portals(
             corner1 < corner2 && closest_at_each_corner[corner1] != closest_at_each_corner[corner2]
         });
         if should_split_along_axis {
+            log::trace!("splitting region along {axis}");
             for opt_destination_subregion in destination_region.split_excluding_corners(axis) {
                 if let Some(destination_subregion) = opt_destination_subregion {
                     mark_reachable_portals(
@@ -311,6 +382,7 @@ fn minima_by_opt_key<I: IntoIterator, C: Ord>(
     ret
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PortalDestinations<'a> {
     pub existing_portals: Vec<&'a Portal>,
     pub new_portal: bool,
@@ -318,6 +390,8 @@ pub struct PortalDestinations<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::Entity;
+
     use super::*;
 
     #[test]
@@ -337,5 +411,28 @@ mod tests {
             [("c", Some(1)), ("h", Some(1))].as_slice(),
             minima_by_opt_key(xs, |(_, key)| *key).as_slice(),
         );
+    }
+
+    #[test]
+    fn test_portal_splitting() {
+        let big = Portal::new_test(([8, 64, 5], [8, 66, 18])); // nether
+        let a = Portal::new_test(([88, 60, -15], [90, 62, -15])); // overworld
+        let b = Portal::new_test(([0, 64, 0], [0, 66, 1])); // overworld
+        let world = World {
+            portals: WorldPortals {
+                overworld: vec![a, b],
+                nether: vec![big.clone()],
+            },
+        };
+        let destination_region = big
+            .destination_region(Entity::PLAYER, Dimension::Overworld)
+            .unwrap();
+        let expected = world
+            .portals
+            .portal_destinations_naive(Dimension::Overworld, destination_region);
+        let actual = world
+            .portals
+            .portal_destinations(Dimension::Overworld, destination_region);
+        assert_eq!(expected, actual);
     }
 }

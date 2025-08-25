@@ -33,6 +33,9 @@ pub const SAVE_FILE_PATH: &str = "world.json";
 /// Margin around each plot.
 pub const PLOT_MARGIN: f32 = 8.0;
 
+/// Animation speed when switching dimensions.
+pub const ANIMATION_SPEED: f64 = 5.0;
+
 /// Ctrl+Z shortcut for undo.
 pub const CMD_Z: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
@@ -60,15 +63,16 @@ fn main() -> eframe::Result {
 pub struct App {
     world: World,
     camera: Camera,
+    animation_state: AnimationState,
 
     lock_portal_size: bool,
     entity: Entity,
-    last_calculated_entity: Entity,
 
     last_saved_state: World,
     undo_history: Vec<World>,
     redo_history: Vec<World>,
 
+    cached_state: (World, Entity),
     cached_links: HashMap<PortalId, PortalLinkResult>,
 }
 
@@ -88,15 +92,16 @@ impl App {
         Self {
             world,
             camera: Camera::default(),
-            entity: Entity::PLAYER,
+            animation_state: AnimationState::default(),
 
             lock_portal_size: true,
-            last_calculated_entity: Entity::default(),
+            entity: Entity::PLAYER,
 
             last_saved_state,
             undo_history: vec![],
             redo_history: vec![],
 
+            cached_state: (World::default(), Entity::default()),
             cached_links: HashMap::new(), // will be recomputed on first frame
         }
     }
@@ -131,11 +136,15 @@ impl App {
         ui.horizontal(|ui| {
             ui.strong("View");
 
-            let mut camera_dimension = self.camera.dimension;
+            let mut new_camera_dimension = self.camera.dimension;
             for dim in [Overworld, Nether] {
-                ui.selectable_value(&mut camera_dimension, dim, dim.to_string());
+                ui.selectable_value(&mut new_camera_dimension, dim, dim.to_string());
             }
-            self.camera.set_dimension(camera_dimension);
+            if new_camera_dimension != self.camera.dimension {
+                self.animation_state.width_scale *=
+                    self.camera.dimension.scale() / new_camera_dimension.scale();
+            }
+            self.camera.set_dimension(new_camera_dimension);
 
             show_world_pos_edit(ui, &mut self.camera.pos, self.camera.dimension);
         });
@@ -200,7 +209,7 @@ impl App {
 
         let destination_id_to_name = self.world.portals[dimension.other()]
             .iter()
-            .map(|p| (p.id, p.name.clone()))
+            .map(|p| (p.id, p.display_name().to_string()))
             .collect::<HashMap<PortalId, String>>();
 
         ui.separator();
@@ -232,6 +241,8 @@ impl App {
                                 egui::Sides::new().shrink_left().show(
                                     ui,
                                     |ui| {
+                                        ui.color_edit_button_srgb(&mut portal.color);
+
                                         ui.horizontal(|ui| {
                                             egui::TextEdit::singleline(&mut portal.name)
                                                 .hint_text("Portal name")
@@ -275,34 +286,50 @@ impl App {
                                 });
                             });
 
-                            match self.cached_links.get(&portal.id) {
-                                None => {
-                                    ui.colored_label(ui.visuals().warn_fg_color, "Calculating ...");
-                                }
-                                Some(PortalLinkResult::EntityWontFit) => {
-                                    ui.colored_label(
-                                        ui.visuals().error_fg_color,
-                                        "Entity won't fit",
+                            show_link_result(
+                                ui,
+                                self.cached_links.get(&portal.id),
+                                &destination_id_to_name,
+                            );
+
+                            ui.small_button("Calculate naively (expensive)")
+                                .on_hover_ui(|ui| {
+                                    let destination_dimension = dimension.other();
+                                    let link_result = match portal
+                                        .entity_collision_region(self.entity)
+                                    {
+                                        None => PortalLinkResult::EntityWontFit,
+                                        Some(entry_region) => {
+                                            let destination_region = entry_region
+                                                .convert_dimension(
+                                                    dimension,
+                                                    destination_dimension,
+                                                );
+                                            let destinations = self
+                                                .last_saved_state
+                                                .portals
+                                                .portal_destinations_naive(
+                                                    destination_dimension,
+                                                    destination_region.block_region_containing(),
+                                                );
+
+                                            PortalLinkResult::Portals {
+                                                ids: destinations
+                                                    .existing_portals
+                                                    .iter()
+                                                    .map(|p| p.id)
+                                                    .collect(),
+                                                new_portal: destinations.new_portal,
+                                            }
+                                        }
+                                    };
+
+                                    show_link_result(
+                                        ui,
+                                        Some(&link_result),
+                                        &destination_id_to_name,
                                     );
-                                }
-                                Some(PortalLinkResult::Portals { ids, new_portal }) => {
-                                    if !ids.is_empty() {
-                                        let mut names = ids.iter().map(|id| {
-                                            destination_id_to_name
-                                                .get(id)
-                                                .map(|s| s.as_str())
-                                                .unwrap_or("<unknown>")
-                                        });
-                                        ui.strong(format!("Links to: {}", names.join(", ")));
-                                    }
-                                    if *new_portal {
-                                        ui.colored_label(
-                                            ui.visuals().warn_fg_color,
-                                            "Generates new portal",
-                                        );
-                                    }
-                                }
-                            }
+                                });
                         });
 
                         reorder_drag_rect.max.y = ui.min_rect().max.y;
@@ -374,6 +401,12 @@ impl App {
         plane: Plane,
         new_camera: &mut Camera,
     ) -> egui::Response {
+        let width_scale = self.animation_state.width_scale;
+        let height_scale = match plane {
+            Plane::XY | Plane::ZY => 1.0,
+            Plane::XZ => width_scale,
+        };
+
         let mut plot = egui_plot::Plot::new(plane)
             .x_axis_label(match plane {
                 Plane::XY | Plane::XZ => "X",
@@ -385,7 +418,10 @@ impl App {
             })
             .x_grid_spacer(egui_plot::log_grid_spacer(8))
             .y_grid_spacer(egui_plot::log_grid_spacer(8))
-            .data_aspect(1.0)
+            .data_aspect(match plane {
+                Plane::XY | Plane::ZY => width_scale as f32,
+                Plane::XZ => 1.0,
+            })
             .x_axis_formatter(|mark, _range| mark.value.to_string())
             .y_axis_formatter(|mark, _range| {
                 let y = mark.value;
@@ -426,11 +462,10 @@ impl App {
                 Plane::XZ => [self.camera.pos.x, -self.camera.pos.z],
                 Plane::ZY => [self.camera.pos.z, self.camera.pos.y],
             };
-            let old_width = plot_ui.plot_bounds().width();
-            let old_height = plot_ui.plot_bounds().width();
-            let new_width = self.camera.height / old_height * old_width;
-            bounds_from_camera.set_x_center_width(x, new_width);
-            bounds_from_camera.set_y_center_height(y, self.camera.height);
+            let raw_size = plot_ui.transform().frame().size();
+            let new_width = self.camera.height * raw_size.x as f64 / raw_size.y as f64;
+            bounds_from_camera.set_x_center_width(x, new_width * width_scale);
+            bounds_from_camera.set_y_center_height(y, self.camera.height * height_scale);
 
             plot_ui.set_plot_bounds(bounds_from_camera);
 
@@ -446,8 +481,8 @@ impl App {
                 Plane::XZ => (new_camera.pos.x, new_camera.pos.z) = (x, -y),
                 Plane::ZY => (new_camera.pos.z, new_camera.pos.y) = (x, y),
             }
-            new_camera.width = bounds.width();
-            new_camera.height = bounds.height();
+            new_camera.width = bounds.width() / width_scale;
+            new_camera.height = bounds.height() / height_scale;
         }
 
         r.response
@@ -518,7 +553,11 @@ impl App {
         }
     }
 
-    fn portal_link_result(&self, portal: &Portal, portal_dimension: Dimension) -> PortalLinkResult {
+    fn calculate_portal_link_result(
+        &self,
+        portal: &Portal,
+        portal_dimension: Dimension,
+    ) -> PortalLinkResult {
         let destination_dimension = portal_dimension.other();
         let Some(entry_region) = portal.entity_collision_region(self.entity) else {
             return PortalLinkResult::EntityWontFit;
@@ -539,8 +578,10 @@ impl App {
         self.cached_links.clear();
         for portal_dimension in [Overworld, Nether] {
             for portal in &self.world.portals[portal_dimension] {
-                self.cached_links
-                    .insert(portal.id, self.portal_link_result(portal, portal_dimension));
+                self.cached_links.insert(
+                    portal.id,
+                    self.calculate_portal_link_result(portal, portal_dimension),
+                );
             }
         }
     }
@@ -560,8 +601,6 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
-        let mut must_recalculate_portal_links = false;
-
         egui::CentralPanel::default().show(ctx, |ui| {
             let mut new_camera = self.camera;
 
@@ -585,6 +624,13 @@ impl eframe::App for App {
                 });
             }
             self.camera = new_camera;
+            let now = std::time::Instant::now();
+            self.animation_state
+                .step((now - self.animation_state.last_frame).as_secs_f64());
+            self.animation_state.last_frame = now;
+            if self.animation_state.width_scale != 1.0 {
+                ctx.request_repaint();
+            }
 
             ui.scope_builder(egui::UiBuilder::new().max_rect(right_top), |ui| {
                 egui::ScrollArea::horizontal()
@@ -601,7 +647,6 @@ impl eframe::App for App {
                         self.redo_history.clear();
                         self.undo_history.push(state_to_save);
                         self.save_to_file();
-                        must_recalculate_portal_links = true;
                     }
 
                     // Consume the most specific shortcut first
@@ -616,13 +661,10 @@ impl eframe::App for App {
             });
         });
 
-        if self.last_calculated_entity != self.entity {
-            self.last_calculated_entity = self.entity;
-            must_recalculate_portal_links = true;
-        }
-
-        if must_recalculate_portal_links {
+        let (cached_world, cached_entity) = &self.cached_state;
+        if (cached_world, cached_entity) != (&self.world, &self.entity) {
             let t = std::time::Instant::now();
+            self.cached_state = (self.world.clone(), self.entity);
             self.recalculate_portal_links();
             log::debug!("Recalculated portal links in {:?}", t.elapsed());
         }
@@ -693,4 +735,56 @@ enum PortalLinkResult {
         ids: Vec<PortalId>,
         new_portal: bool,
     },
+}
+
+fn show_link_result(
+    ui: &mut egui::Ui,
+    result: Option<&PortalLinkResult>,
+    destination_id_to_name: &HashMap<PortalId, String>,
+) {
+    match result {
+        None => {
+            ui.colored_label(ui.visuals().warn_fg_color, "Calculating ...");
+        }
+        Some(PortalLinkResult::EntityWontFit) => {
+            ui.colored_label(ui.visuals().error_fg_color, "Entity won't fit");
+        }
+        Some(PortalLinkResult::Portals { ids, new_portal }) => {
+            if !ids.is_empty() {
+                let mut names = ids.iter().map(|id| {
+                    destination_id_to_name
+                        .get(id)
+                        .map(|s| s.as_str())
+                        .unwrap_or("<unknown>")
+                });
+                ui.strong(format!("Links to: {}", names.join(", ")));
+            }
+            if *new_portal {
+                ui.colored_label(ui.visuals().warn_fg_color, "Generates new portal");
+            }
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+struct AnimationState {
+    last_frame: std::time::Instant,
+    width_scale: f64,
+}
+impl Default for AnimationState {
+    fn default() -> Self {
+        Self {
+            last_frame: std::time::Instant::now(),
+            width_scale: 1.0,
+        }
+    }
+}
+impl AnimationState {
+    fn step(&mut self, dt: f64) {
+        self.width_scale = self.width_scale.powf(1.0 - dt * ANIMATION_SPEED);
+        dbg!(self.width_scale);
+        if self.width_scale.log2().abs() < 0.01 {
+            self.width_scale = 1.0;
+        }
+    }
 }

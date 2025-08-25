@@ -1,5 +1,4 @@
 use egui::NumExt;
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 use crate::util::{max_range_distance_to, min_range_distance_to, min_range_distance_to_pos};
@@ -12,6 +11,15 @@ pub struct BlockRegion {
     pub min: BlockPos,
     /// Maximum coordinate (inclusive)
     pub max: BlockPos,
+}
+
+impl<A: Into<BlockPos>, B: Into<BlockPos>> From<(A, B)> for BlockRegion {
+    fn from((min, max): (A, B)) -> Self {
+        BlockRegion {
+            min: min.into(),
+            max: max.into(),
+        }
+    }
 }
 
 impl BlockRegion {
@@ -66,9 +74,9 @@ impl BlockRegion {
     /// Returns an iterator over all positions in the block.
     pub fn iter(self) -> impl Iterator<Item = BlockPos> {
         itertools::iproduct!(
-            self.min.x..=self.max.x,
+            self.min.z..=self.max.z,
             self.min.y..=self.max.y,
-            self.min.z..=self.max.z
+            self.min.x..=self.max.x,
         )
         .map(|(x, y, z)| BlockPos { x, y, z })
     }
@@ -77,13 +85,37 @@ impl BlockRegion {
         self.min[axis] <= self.max[axis]
     }
 
-    /// Returns the 8 corners of the region.
+    /// Returns the 8 corners of the region in the following order:
+    ///
+    /// ```
+    /// [-, -, -]
+    /// [+, -, -]
+    /// [-, +, -]
+    /// [+, +, -]
+    /// [-, -, +]
+    /// [+, -, +]
+    /// [-, +, +]
+    /// [+, +, +]
+    /// ```
+    ///
+    /// The X axis is represented by the least significant bit of the index; the
+    /// Z axis is represented by the most significant bit.
     pub fn corners(self) -> [BlockPos; 8] {
         let BlockRegion { min, max } = self;
-        itertools::iproduct!([min.x, max.x], [min.y, max.y], [min.z, max.z])
-            .map(|(x, y, z)| BlockPos { x, y, z })
-            .collect_array()
-            .expect("expected 8 vertices")
+        let [x1, y1, z1] = min.into();
+        let [x2, y2, z2] = max.into();
+
+        [
+            [x1, y1, z1],
+            [x2, y1, z1],
+            [x1, y2, z1],
+            [x2, y2, z1],
+            [x1, y1, z2],
+            [x2, y1, z2],
+            [x1, y2, z2],
+            [x2, y2, z2],
+        ]
+        .map(BlockPos::from)
     }
     /// Splits a region in half along `axis`, excluding the ends along that
     /// axis.

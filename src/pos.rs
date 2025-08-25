@@ -9,11 +9,16 @@ use crate::{ConvertDimension, Dimension};
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Axis {
     /// EAST/WEST
-    X,
+    X = 0,
     /// UP/DOWN
-    Y,
+    Y = 1,
     /// NORTH/SOUTH
-    Z,
+    Z = 2,
+}
+impl fmt::Display for Axis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", ['X', 'Y', 'Z'][*self as usize])
+    }
 }
 impl Axis {
     /// Array of all axes.
@@ -61,6 +66,17 @@ impl From<WorldPos> for BlockPos {
             y: y.floor() as i64,
             z: z.floor() as i64,
         }
+    }
+}
+impl From<[i64; 3]> for BlockPos {
+    fn from([x, y, z]: [i64; 3]) -> Self {
+        BlockPos { x, y, z }
+    }
+}
+impl From<BlockPos> for [i64; 3] {
+    fn from(value: BlockPos) -> Self {
+        let BlockPos { x, y, z } = value;
+        [x, y, z]
     }
 }
 impl BlockPos {
