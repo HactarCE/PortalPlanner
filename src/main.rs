@@ -1,19 +1,19 @@
-use std::ops::RangeInclusive;
-
+use egui::Widget;
 use egui::emath::GuiRounding;
-use egui::{Widget, emath::Numeric};
 
 mod camera;
 mod entity;
 mod portal;
 mod pos;
 mod region;
+mod util;
 mod world;
 
 pub use Dimension::{Nether, Overworld};
 pub use camera::{Camera, Plane};
 use egui_plot::PlotPoint;
 pub use entity::Entity;
+use itertools::Itertools;
 pub use portal::{Direction, Portal, PortalAxis};
 pub use pos::{Axis, BlockPos, WorldPos};
 pub use region::{BlockRegion, WorldRegion};
@@ -46,6 +46,7 @@ pub struct App {
 
     dimension: Dimension,
     lock_portal_size: bool,
+    entity: Entity,
 
     last_saved_state: World,
     undo_history: Vec<World>,
@@ -67,6 +68,7 @@ impl App {
         Self {
             world,
             camera: Camera::default(),
+            entity: Entity::PLAYER,
 
             dimension: Overworld,
             lock_portal_size: true,
@@ -105,6 +107,8 @@ impl App {
         let mut changed = false;
 
         ui.horizontal(|ui| {
+            ui.strong("View");
+
             let old_dimension = self.dimension;
             for dim in [Overworld, Nether] {
                 ui.selectable_value(&mut self.dimension, dim, dim.to_string());
@@ -118,6 +122,31 @@ impl App {
 
             show_world_pos_edit(ui, &mut self.camera.pos, self.dimension);
         });
+
+        ui.horizontal(|ui| {
+            ui.strong("Entity");
+            ui.menu_button("Load…", |ui| {
+                if ui.button("Player").clicked() {
+                    self.entity = Entity::PLAYER;
+                }
+                if ui.button("Ender pearl").clicked() {
+                    self.entity = Entity::ENDER_PEARL;
+                }
+                if ui.button("Arrow").clicked() {
+                    self.entity = Entity::ARROW;
+                }
+                if ui.button("Ghast").clicked() {
+                    self.entity = Entity::GHAST;
+                }
+            });
+            coordinate_label(ui, "Width");
+            ui.add(egui::DragValue::new(&mut self.entity.width).range(0.0..=256.0));
+            coordinate_label(ui, "Height");
+            ui.add(egui::DragValue::new(&mut self.entity.height).range(0.0..=256.0));
+            ui.checkbox(&mut self.entity.is_projectile, "Projectile");
+        });
+
+        ui.separator();
 
         ui.horizontal(|ui| {
             if ui.button("Add portal pair").clicked() {
@@ -152,15 +181,13 @@ impl App {
         ui.separator();
 
         let mut reorder_swap = None;
+        let mut remove = None;
         let list_len = self.world.portals[dimension].len();
         egui::ScrollArea::vertical()
             .id_salt(dimension)
             .auto_shrink([false; 2])
             .show(ui, |ui| {
-                let mut i = 0;
-                self.world.portals[dimension].retain_mut(|portal| {
-                    let mut keep = true;
-
+                for (i, portal) in self.world.portals[dimension].iter_mut().enumerate() {
                     if i > 0 {
                         ui.separator();
                     }
@@ -168,7 +195,7 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
                             if ui.button("🗑").clicked() {
-                                keep = false;
+                                remove = Some(i);
                             }
 
                             if ui.add_visible(i > 0, egui::Button::new("⬆")).clicked() {
@@ -178,7 +205,6 @@ impl App {
                             if ui.add_visible(i < end, egui::Button::new("⬇")).clicked() {
                                 reorder_swap = Some((i, i + 1));
                             }
-                            i += 1;
                         });
 
                         ui.vertical(|ui| {
@@ -210,15 +236,43 @@ impl App {
                                 portal.adjust_width(|w| dv_i64(ui, "Width", w));
                                 portal.adjust_height(|h| dv_i64(ui, "Height", h), dimension);
                             });
+
+                            let destination_dimension = dimension.other();
+                            let Some(entry_region) = portal.entity_collision_region(self.entity)
+                            else {
+                                ui.small("Entity won't fit");
+                                return;
+                            };
+                            let destination_region =
+                                entry_region.convert_dimension(dimension, destination_dimension);
+
+                            let reachable = self.last_saved_state.portals.reachable_portals(
+                                destination_dimension,
+                                destination_region.block_region_containing(),
+                            );
+                            if !reachable.existing_portals.is_empty() {
+                                ui.small(format!(
+                                    "Links to {}",
+                                    reachable
+                                        .existing_portals
+                                        .iter()
+                                        .map(|p| p.display_name())
+                                        .join(", "),
+                                ));
+                            }
+                            if reachable.new_portal {
+                                ui.small("Generates new portal");
+                            }
                         });
                     });
-
-                    keep
-                });
+                }
             });
 
         if let Some((i, j)) = reorder_swap {
             self.world.portals[dimension].swap(i, j);
+        }
+        if let Some(i) = remove {
+            self.world.portals[dimension].remove(i);
         }
     }
 
@@ -265,7 +319,7 @@ impl App {
                 egui_plot::CoordinatesFormatter::new(|hover_point, _bounds| {
                     let (x, y, z) = match plane {
                         Plane::XY => (hover_point.x, hover_point.y, new_camera.pos.z),
-                        Plane::XZ => (hover_point.x, new_camera.pos.y, hover_point.y),
+                        Plane::XZ => (hover_point.x, new_camera.pos.y, -hover_point.y),
                         Plane::ZY => (new_camera.pos.x, hover_point.y, hover_point.x),
                     };
                     let pos = WorldPos { x, y, z };

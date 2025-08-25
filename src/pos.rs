@@ -52,6 +52,15 @@ impl From<WorldPos> for BlockPos {
         }
     }
 }
+impl BlockPos {
+    /// Returns the squared Euclidean distance between `self` and `other`.
+    pub fn euclidean_distance_sq(&self, other: &Self) -> i64 {
+        let dx = self.x - other.x;
+        let dy = self.y - other.y;
+        let dz = self.z - other.z;
+        dx * dx + dy * dy + dz * dz
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]
 pub struct WorldPos {

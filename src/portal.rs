@@ -53,21 +53,26 @@ impl Portal {
     /// height of a portal.
     const MIN_DH: i64 = Self::MIN_HEIGHT - 1;
 
-    /// Returns the range of possible coordinates for an entity using the
-    /// portal.
-    pub fn teleport_region(self, entity: Entity) -> WorldRegion {
+    /// Returns the region where an entity can collide with the portal and thus
+    /// be teleported using it.
+    ///
+    /// Returns `None` if the entity won't fit in the portal.
+    pub fn entity_collision_region(&self, entity: Entity) -> Option<WorldRegion> {
         let mut result = WorldRegion::from(self.region);
         result.min.x -= entity.width / 2.0;
         result.min.z -= entity.width / 2.0;
         result.max.x += entity.width / 2.0;
-        result.max.y += entity.height;
         result.max.z += entity.width / 2.0;
+        if entity.is_projectile {
+            result.min.y -= entity.height;
+        }
         if !entity.is_projectile {
             // Restrict to within the portal frame.
             result.min[self.width_axis()] += entity.width;
             result.max[self.width_axis()] -= entity.width;
+            result.max.y -= entity.height;
         }
-        result
+        result.is_valid().then_some(result)
     }
 
     pub fn new_minimal(pos: BlockPos, axis: PortalAxis) -> Self {
@@ -96,6 +101,14 @@ impl Portal {
     /// Returns the axis of the depth of the portal.
     pub fn depth_axis(&self) -> Axis {
         self.axis.into()
+    }
+
+    pub fn display_name(&self) -> &str {
+        if self.name.is_empty() {
+            "<unnamed>"
+        } else {
+            &self.name
+        }
     }
 
     /// Adjusts `min`, ensuring that the portal is valid. If `lock_size` is
@@ -228,5 +241,20 @@ impl Portal {
         max[d] = min[d];
 
         r
+    }
+
+    pub fn is_in_range_of_point(&self, pos: BlockPos, dimension: Dimension) -> bool {
+        // Ignore Y axis
+        let r = dimension.portal_search_range();
+        (self.region.min.x - pos.x).abs() <= r && (self.region.min.z - pos.z).abs() <= r
+    }
+
+    pub fn is_in_range_of_region(&self, region: BlockRegion, dimension: Dimension) -> bool {
+        // Ignore Y axis
+        let r = dimension.portal_search_range();
+        self.region.min.x <= region.max.x + r
+            && self.region.min.z <= region.max.z + r
+            && self.region.max.x >= region.min.x - r
+            && self.region.max.z >= region.min.z - r
     }
 }

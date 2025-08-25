@@ -25,4 +25,14 @@ impl Entity {
         height: 0.25,
         is_projectile: true,
     };
+    pub const ARROW: Self = Entity {
+        width: 0.5,
+        height: 0.5,
+        is_projectile: true,
+    };
+    pub const GHAST: Self = Entity {
+        width: 4.0,
+        height: 4.0,
+        is_projectile: false,
+    };
 }
