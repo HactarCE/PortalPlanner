@@ -5,10 +5,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ConvertDimension, Dimension};
 
+/// Axis in the world
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Axis {
+    /// EAST/WEST
     X,
+    /// UP/DOWN
     Y,
+    /// NORTH/SOUTH
     Z,
 }
 impl Axis {
@@ -16,10 +20,17 @@ impl Axis {
     pub const ALL: [Axis; 3] = [Axis::X, Axis::Y, Axis::Z];
 }
 
+/// Block coordinates.
+///
+/// Note that block coordinates cannot be converted directly between dimensions;
+/// they must be converted to world coordinates first.
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct BlockPos {
+    /// EAST/WEST
     pub x: i64,
+    /// UP/DOWN
     pub y: i64,
+    /// NORTH/SOUTH
     pub z: i64,
 }
 impl<T: Into<Axis>> Index<T> for BlockPos {
@@ -62,10 +73,14 @@ impl BlockPos {
     }
 }
 
+/// Coordinates within a dimension.
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]
 pub struct WorldPos {
+    /// EAST/WEST
     pub x: f64,
+    /// UP/DOWN
     pub y: f64,
+    /// NORTH/SOUTH
     pub z: f64,
 }
 impl<T: Into<Axis>> Index<T> for WorldPos {

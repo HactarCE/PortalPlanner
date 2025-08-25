@@ -3,16 +3,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Axis, BlockPos, BlockRegion, Dimension, Entity, PortalId, WorldRegion};
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum Direction {
-    OverworldToNether,
-    NetherToOverworld,
-}
-
 /// Horizontal axis perpendicular to a portal's surface.
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum PortalAxis {
+    /// The portal is entered from east/west; portal width is along north/south
+    /// (Z axis).
     X,
+    /// The portal is entered from north/south; portal width is along east/west
+    /// (X axis).
     Z,
 }
 impl From<PortalAxis> for Axis {
@@ -33,14 +31,18 @@ impl PortalAxis {
     }
 }
 
+/// Portal in an an unspecified dimension.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Portal {
+    /// Unique ID for the portal.
     #[serde(skip, default = "PortalId::new")]
     pub id: PortalId,
 
     /// Human-friendly name of the portal.
     pub name: String,
+    /// Region filled with portal blocks in the source dimension.
     pub region: BlockRegion,
+    /// Portal axis (opposite from what the game says).
     pub axis: PortalAxis,
 }
 
@@ -79,7 +81,8 @@ impl Portal {
         result.is_valid().then_some(result)
     }
 
-    pub fn new_minimal(pos: BlockPos, axis: PortalAxis) -> Self {
+    /// Constructs a new portal at `pos` of the smallest possible size.
+    pub fn new_minimal(pos: BlockPos, axis: PortalAxis, dimension: Dimension) -> Self {
         Self {
             id: PortalId::new(),
 
@@ -87,7 +90,7 @@ impl Portal {
             region: BlockRegion {
                 min: BlockPos {
                     x: pos.x,
-                    y: pos.y,
+                    y: pos.y.at_most(dimension.y_max() - Self::MIN_HEIGHT),
                     z: pos.z,
                 },
                 max: BlockPos {
@@ -109,6 +112,7 @@ impl Portal {
         self.axis.into()
     }
 
+    /// Returns a nonempty human-friendly name for the portal.
     pub fn display_name(&self) -> &str {
         if self.name.is_empty() {
             "<unnamed>"
@@ -197,8 +201,8 @@ impl Portal {
         r
     }
 
-    /// Adjusts the width of the portal, ensuring that the portal is valid.
-    /// `min` is preserved.
+    /// Adjusts the width of the portal using the provided closure, ensuring
+    /// that the portal is valid. `min` is preserved.
     pub fn adjust_width<R>(&mut self, f: impl FnOnce(&mut i64) -> R) -> R {
         let w = self.width_axis();
         let mut width = self.region.max[w] - self.region.min[w] + 1;
@@ -208,8 +212,8 @@ impl Portal {
         r
     }
 
-    /// Adjusts the height of the portal, ensuring that the portal is valid.
-    /// `min` is preserved if possible.
+    /// Adjusts the height of the portal using the provided closure, ensuring
+    /// that the portal is valid. `min` is preserved if possible.
     pub fn adjust_height<R>(&mut self, f: impl FnOnce(&mut i64) -> R, dimension: Dimension) -> R {
         // Bedrock can be broken in survival, but we can't use the full height
         // of the dimension because we need to leave room for the obsidian
@@ -229,6 +233,8 @@ impl Portal {
         r
     }
 
+    /// Adjusts the axis of the portal using the provided closure, ensuring the
+    /// portal is valid.
     pub fn adjust_axis<R>(&mut self, f: impl FnOnce(&mut PortalAxis) -> R) -> R {
         let w = self.width_axis();
 
@@ -249,12 +255,15 @@ impl Portal {
         r
     }
 
+    /// Returns whether the portal is within the portal search range for `pos`.
     pub fn is_in_range_of_point(&self, pos: BlockPos, dimension: Dimension) -> bool {
         // Ignore Y axis
         let r = dimension.portal_search_range();
         (self.region.min.x - pos.x).abs() <= r && (self.region.min.z - pos.z).abs() <= r
     }
 
+    /// Returns whether the portal is within the portal search range for any
+    /// point in `region`.
     pub fn is_in_range_of_region(&self, region: BlockRegion, dimension: Dimension) -> bool {
         // Ignore Y axis
         let r = dimension.portal_search_range();

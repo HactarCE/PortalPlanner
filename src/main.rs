@@ -1,3 +1,5 @@
+//! Tool for planning Minecraft nether portal linkages.
+
 use std::collections::HashMap;
 
 use egui::Widget;
@@ -18,21 +20,28 @@ use egui_plot::PlotPoint;
 pub use entity::Entity;
 pub use id::PortalId;
 use itertools::Itertools;
-pub use portal::{Direction, Portal, PortalAxis};
+pub use portal::{Portal, PortalAxis};
 pub use pos::{Axis, BlockPos, WorldPos};
 pub use region::{BlockRegion, WorldRegion};
 pub use world::{ConvertDimension, Dimension, World, WorldPortals};
 
+/// Scroll sensitivity override for egui, particularly when zooming in/out of
+/// the plot.
 pub const SCROLL_SENSITIVITY: f32 = 0.25;
+/// Path for loading & saving the portal configuration.
 pub const SAVE_FILE_PATH: &str = "world.json";
+/// Margin around each plot.
 pub const PLOT_MARGIN: f32 = 8.0;
 
+/// Ctrl+Z shortcut for undo.
 pub const CMD_Z: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
+/// Ctrl+Shift+Z shortcut for redo.
 pub const CMD_SHIFT_Z: egui::KeyboardShortcut = egui::KeyboardShortcut::new(
     egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
     egui::Key::Z,
 );
+/// Ctrl+Y shortcut for redo.
 pub const CMD_Y: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y);
 
@@ -47,11 +56,11 @@ fn main() -> eframe::Result {
     )
 }
 
+/// Application state.
 pub struct App {
     world: World,
     camera: Camera,
 
-    dimension: Dimension,
     lock_portal_size: bool,
     entity: Entity,
     last_calculated_entity: Entity,
@@ -64,6 +73,7 @@ pub struct App {
 }
 
 impl App {
+    /// Constructs the application state.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         cc.egui_ctx
             .style_mut(|style| style.explanation_tooltips = true);
@@ -80,7 +90,6 @@ impl App {
             camera: Camera::default(),
             entity: Entity::PLAYER,
 
-            dimension: Overworld,
             lock_portal_size: true,
             last_calculated_entity: Entity::default(),
 
@@ -122,18 +131,13 @@ impl App {
         ui.horizontal(|ui| {
             ui.strong("View");
 
-            let old_dimension = self.dimension;
+            let mut camera_dimension = self.camera.dimension;
             for dim in [Overworld, Nether] {
-                ui.selectable_value(&mut self.dimension, dim, dim.to_string());
+                ui.selectable_value(&mut camera_dimension, dim, dim.to_string());
             }
-            if old_dimension != self.dimension {
-                self.camera.pos = self
-                    .camera
-                    .pos
-                    .convert_dimension(old_dimension, self.dimension);
-            }
+            self.camera.set_dimension(camera_dimension);
 
-            show_world_pos_edit(ui, &mut self.camera.pos, self.dimension);
+            show_world_pos_edit(ui, &mut self.camera.pos, self.camera.dimension);
         });
 
         ui.horizontal(|ui| {
@@ -150,6 +154,9 @@ impl App {
                 }
                 if ui.button("Ghast").clicked() {
                     self.entity = Entity::GHAST;
+                }
+                if ui.button("Item").clicked() {
+                    self.entity = Entity::ITEM;
                 }
             });
             coordinate_label(ui, "Width");
@@ -305,12 +312,16 @@ impl App {
     }
 
     fn add_portal_in_overworld(&mut self) {
-        let new_portal = Portal::new_minimal(self.camera.pos.into(), PortalAxis::X);
+        let new_portal =
+            Portal::new_minimal(self.camera.pos.into(), PortalAxis::X, self.camera.dimension);
         self.world.portals.overworld.push(new_portal);
     }
     fn add_portal_in_nether(&mut self) {
-        let new_portal =
-            Portal::new_minimal(self.camera.pos.overworld_to_nether().into(), PortalAxis::X);
+        let new_portal = Portal::new_minimal(
+            self.camera.pos.overworld_to_nether().into(),
+            PortalAxis::X,
+            self.camera.dimension,
+        );
         self.world.portals.nether.push(new_portal);
     }
 
@@ -318,7 +329,6 @@ impl App {
         &mut self,
         ui: &mut egui::Ui,
         plane: Plane,
-        dimension: Dimension,
         new_camera: &mut Camera,
     ) -> egui::Response {
         let mut plot = egui_plot::Plot::new(plane)
@@ -353,8 +363,8 @@ impl App {
                     let pos = WorldPos { x, y, z };
                     format!(
                         "Overworld: {overworld:10.03}\n   Nether: {nether:10.03}",
-                        overworld = pos.convert_dimension(dimension, Overworld),
-                        nether = pos.convert_dimension(dimension, Nether),
+                        overworld = pos.convert_dimension(self.camera.dimension, Overworld),
+                        nether = pos.convert_dimension(self.camera.dimension, Nether),
                     )
                 }),
             );
@@ -381,7 +391,7 @@ impl App {
 
             plot_ui.set_plot_bounds(bounds_from_camera);
 
-            self.show_portals_in_plot(plot_ui, plane, dimension);
+            self.show_portals_in_plot(plot_ui, plane);
         });
 
         // Update camera on interaction with plot
@@ -400,12 +410,8 @@ impl App {
         r.response
     }
 
-    fn show_portals_in_plot(
-        &self,
-        plot_ui: &mut egui_plot::PlotUi,
-        plane: Plane,
-        dimension: Dimension,
-    ) {
+    fn show_portals_in_plot(&self, plot_ui: &mut egui_plot::PlotUi<'_>, plane: Plane) {
+        let dimension = self.camera.dimension;
         for portal_dim in [dimension, dimension.other()] {
             for portal in &self.world.portals[portal_dim] {
                 self.show_portal_in_plot(plot_ui, plane, portal, portal_dim, dimension);
@@ -415,7 +421,7 @@ impl App {
 
     fn show_portal_in_plot(
         &self,
-        plot_ui: &mut egui_plot::PlotUi,
+        plot_ui: &mut egui_plot::PlotUi<'_>,
         plane: Plane,
         portal: &Portal,
         portal_dimension: Dimension,
@@ -488,7 +494,7 @@ impl App {
 
     fn recalculate_portal_links(&mut self) {
         self.cached_links.clear();
-        for portal_dimension in [Dimension::Overworld, Dimension::Nether] {
+        for portal_dimension in [Overworld, Nether] {
             for portal in &self.world.portals[portal_dimension] {
                 self.cached_links
                     .insert(portal.id, self.portal_link_result(portal, portal_dimension));
@@ -532,7 +538,7 @@ impl eframe::App for App {
                 (Plane::XZ, left_top),
             ] {
                 ui.put(rect, |ui: &mut egui::Ui| {
-                    self.show_view(ui, plane, self.dimension, &mut new_camera)
+                    self.show_view(ui, plane, &mut new_camera)
                 });
             }
             self.camera = new_camera;
@@ -564,7 +570,7 @@ impl eframe::App for App {
                         self.save_to_file();
                     }
                 }
-            })
+            });
         });
 
         if self.last_calculated_entity != self.entity {
@@ -621,7 +627,7 @@ fn show_world_pos_edit(
     .response
 }
 
-pub fn dv_i64(ui: &mut egui::Ui, label: &str, i: &mut i64) -> egui::Response {
+fn dv_i64(ui: &mut egui::Ui, label: &str, i: &mut i64) -> egui::Response {
     ui.horizontal(|ui| {
         coordinate_label(ui, label);
         egui::DragValue::new(i)

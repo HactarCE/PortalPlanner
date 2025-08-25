@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::util::{max_range_distance_to, min_range_distance_to, min_range_distance_to_pos};
 use crate::{Axis, BlockPos, ConvertDimension, WorldPos};
 
+/// Cuboid of block coordinates.
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct BlockRegion {
     /// Minimum coordinate (inclusive)
@@ -28,10 +29,10 @@ impl BlockRegion {
         self.min.z = self.min.z.at_most(self.max.z);
     }
 
-    /// Returns the minimum possible squared Euclidean distance between any
+    /// Returns the **minimum** possible squared Euclidean distance between any
     /// point in `self` and the closest point in `other`.
     ///
-    /// This chooses the closest point in both regions.
+    /// This chooses the **closest** point in both regions.
     pub fn min_euclidean_distance_sq_to(self, other: Self) -> i64 {
         let dx = min_range_distance_to(self.min.x..=self.max.x, other.min.x..=other.max.x);
         let dy = min_range_distance_to(self.min.y..=self.max.y, other.min.y..=other.max.y);
@@ -39,11 +40,11 @@ impl BlockRegion {
         dx * dx + dy * dy + dz * dz
     }
 
-    /// Returns the maximum possible squared Euclidean distance between any
+    /// Returns the **maximum** possible squared Euclidean distance between any
     /// point in `self` and the closest point in `other`.
     ///
-    /// This chooses the farthest point in `self` and the closest point in
-    /// `other`.
+    /// This chooses the **farthest** point in `self` and the **closest** point
+    /// in `other`.
     pub fn max_euclidean_distance_sq_to(self, other: Self) -> i64 {
         let dx = max_range_distance_to(self.min.x..=self.max.x, other.min.x..=other.max.x);
         let dy = max_range_distance_to(self.min.y..=self.max.y, other.min.y..=other.max.y);
@@ -51,6 +52,10 @@ impl BlockRegion {
         dx * dx + dy * dy + dz * dz
     }
 
+    /// Returns the **minimum** possible squared Euclidean distance between any
+    /// point in `self` and `other`.
+    ///
+    /// This chooses the **closest** point in `self`.
     pub fn min_euclidean_distance_sq_to_point(self, pos: BlockPos) -> i64 {
         let dx = min_range_distance_to_pos(self.min.x..=self.max.x, pos.x);
         let dy = min_range_distance_to_pos(self.min.y..=self.max.y, pos.y);
@@ -72,6 +77,7 @@ impl BlockRegion {
         self.min[axis] <= self.max[axis]
     }
 
+    /// Returns the 8 corners of the region.
     pub fn corners(self) -> [BlockPos; 8] {
         let BlockRegion { min, max } = self;
         itertools::iproduct!([min.x, max.x], [min.y, max.y], [min.z, max.z])
@@ -122,6 +128,7 @@ impl BlockRegion {
     }
 }
 
+/// Cuboid of world coordinates.
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]
 pub struct WorldRegion {
     /// Minimum coordinate (inclusive)
@@ -157,6 +164,7 @@ impl ConvertDimension for WorldRegion {
 }
 
 impl WorldRegion {
+    /// Returns the position at the center of the region.
     pub fn center(self) -> WorldPos {
         WorldPos {
             x: (self.min.x + self.max.x) * 0.5,
@@ -165,6 +173,7 @@ impl WorldRegion {
         }
     }
 
+    /// Returns the smallest block region that contains `self`.
     pub fn block_region_containing(self) -> BlockRegion {
         BlockRegion {
             min: self.min.into(), // floor
@@ -172,6 +181,8 @@ impl WorldRegion {
         }
     }
 
+    /// Returns whether the minimum coordinate is less than or equal to the
+    /// maximum coordinate along each axis.
     pub fn is_valid(self) -> bool {
         self.min.x <= self.max.x && self.min.y <= self.max.y && self.min.z <= self.max.z
     }

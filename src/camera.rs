@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use crate::WorldPos;
+use crate::{ConvertDimension, Dimension, WorldPos};
 
 /// Plane of the world to view.
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
+#[allow(missing_docs)]
 pub enum Plane {
     #[default]
     XY,
@@ -11,9 +12,12 @@ pub enum Plane {
     ZY,
 }
 
+/// Plot camera location.
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
 pub struct Camera {
-    /// Overworld position of the center of the viewport.
+    /// Dimension being viewed.
+    pub dimension: Dimension,
+    /// Position of the center of the viewport.
     pub pos: WorldPos,
     /// Width of viewport, measured in overworld coordinates.
     pub width: f64,
@@ -24,6 +28,7 @@ pub struct Camera {
 impl Default for Camera {
     fn default() -> Self {
         Self {
+            dimension: Dimension::Overworld,
             pos: WorldPos {
                 x: 0.0,
                 y: 64.0,
@@ -32,5 +37,18 @@ impl Default for Camera {
             width: 100.0,
             height: 100.0,
         }
+    }
+}
+
+impl Camera {
+    /// Returns the position of the camera in the given dimension.
+    pub fn pos_in(self, dimension: Dimension) -> WorldPos {
+        self.pos.convert_dimension(self.dimension, dimension)
+    }
+
+    /// Sets the dimension of the camera, converting its position accordingly.
+    pub fn set_dimension(&mut self, dimension: Dimension) {
+        self.pos = self.pos_in(dimension);
+        self.dimension = dimension;
     }
 }

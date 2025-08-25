@@ -7,7 +7,9 @@ use smallvec::{SmallVec, smallvec};
 
 use crate::{Axis, BlockRegion, Portal};
 
+/// Overworld or nether.
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
+#[allow(missing_docs)]
 pub enum Dimension {
     #[default]
     Overworld,
@@ -24,6 +26,8 @@ impl fmt::Display for Dimension {
 }
 
 impl Dimension {
+    /// Returns the scale of the dimension, which provides the conversion rate
+    /// between dimensions.
     pub fn scale(self) -> f64 {
         match self {
             Dimension::Overworld => 1.0,
@@ -31,6 +35,7 @@ impl Dimension {
         }
     }
 
+    /// Returns the lowest Y coordinate at which a block can be placed.
     pub fn y_min(self) -> i64 {
         match self {
             Dimension::Overworld => -64,
@@ -38,6 +43,7 @@ impl Dimension {
         }
     }
 
+    /// Returns the highest Y coordinate at which a block can be placed.
     pub fn y_max(self) -> i64 {
         match self {
             Dimension::Overworld => 319,
@@ -45,6 +51,7 @@ impl Dimension {
         }
     }
 
+    /// Returns the range of Y coordinates at which blocks can be placed.
     pub fn y_range(self) -> RangeInclusive<i64> {
         self.y_min()..=self.y_max()
     }
@@ -72,14 +79,19 @@ impl Dimension {
     }
 }
 
+/// Minecraft world.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 pub struct World {
+    /// Portals in each dimension.
     pub portals: WorldPortals,
 }
 
+/// Portals in a Minecraft world.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 pub struct WorldPortals {
+    /// Portals in the overworld.
     pub overworld: Vec<Portal>,
+    /// Portals in the nether.
     pub nether: Vec<Portal>,
 }
 
@@ -105,12 +117,15 @@ impl IndexMut<Dimension> for WorldPortals {
 
 /// Trait for types that can be converted between dimensions.
 pub trait ConvertDimension: Sized {
+    /// Converts from nether coordinates to overworld coordinates.
     #[must_use]
     fn nether_to_overworld(self) -> Self;
 
+    /// Converts from overworld coordinates to nether coordinates.
     #[must_use]
     fn overworld_to_nether(self) -> Self;
 
+    /// Converts coordinates from one dimension to another.
     #[must_use]
     fn convert_dimension(self, from: Dimension, to: Dimension) -> Self {
         match (from, to) {
@@ -123,16 +138,7 @@ pub trait ConvertDimension: Sized {
 }
 
 impl WorldPortals {
-    pub fn portals_in_range(
-        &self,
-        destination_dimension: Dimension,
-        destination_region: BlockRegion,
-    ) -> impl Iterator<Item = &Portal> {
-        self[destination_dimension]
-            .iter()
-            .filter(move |p| p.is_in_range_of_region(destination_region, destination_dimension))
-    }
-
+    /// Returns the set of portals that are reachable from `destination_region`.
     pub fn portal_destinations(
         &self,
         destination_dimension: Dimension,
@@ -148,7 +154,7 @@ impl WorldPortals {
         mark_reachable_portals(
             destination_dimension,
             destination_region,
-            &candidates,
+            candidates,
             (0..candidates.len()).collect(),
             &mut confirmed_reachable,
             &mut may_generate_new_portal,
