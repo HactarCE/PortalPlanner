@@ -209,10 +209,10 @@ impl App {
             }
         }
 
-        let destination_id_to_name = self.world.portals[dimension.other()]
+        let destinations_by_id = self.last_saved_state.portals[dimension.other()]
             .iter()
-            .map(|p| (p.id, p.display_name().to_string()))
-            .collect::<HashMap<PortalId, String>>();
+            .map(|p| (p.id, p))
+            .collect::<HashMap<PortalId, &Portal>>();
 
         ui.separator();
 
@@ -291,47 +291,43 @@ impl App {
                             show_link_result(
                                 ui,
                                 self.cached_links.get(&portal.id),
-                                &destination_id_to_name,
+                                &destinations_by_id,
                             );
 
-                            ui.small_button("Calculate naively (expensive)")
-                                .on_hover_ui(|ui| {
-                                    let destination_dimension = dimension.other();
-                                    let link_result = match portal
-                                        .entity_collision_region(self.entity)
-                                    {
-                                        None => PortalLinkResult::EntityWontFit,
-                                        Some(entry_region) => {
-                                            let destination_region = entry_region
-                                                .convert_dimension(
-                                                    dimension,
-                                                    destination_dimension,
-                                                );
-                                            let destinations = self
-                                                .last_saved_state
-                                                .portals
-                                                .portal_destinations_naive(
-                                                    destination_dimension,
-                                                    destination_region.block_region_containing(),
-                                                );
+                            // ui.small_button("Calculate naively (expensive)")
+                            //     .on_hover_ui(|ui| {
+                            //         let destination_dimension = dimension.other();
+                            //         let link_result = match portal
+                            //             .entity_collision_region(self.entity)
+                            //         {
+                            //             None => PortalLinkResult::EntityWontFit,
+                            //             Some(entry_region) => {
+                            //                 let destination_region = entry_region
+                            //                     .convert_dimension(
+                            //                         dimension,
+                            //                         destination_dimension,
+                            //                     );
+                            //                 let destinations = self
+                            //                     .last_saved_state
+                            //                     .portals
+                            //                     .portal_destinations_naive(
+                            //                         destination_dimension,
+                            //                         destination_region.block_region_containing(),
+                            //                     );
 
-                                            PortalLinkResult::Portals {
-                                                ids: destinations
-                                                    .existing_portals
-                                                    .iter()
-                                                    .map(|p| p.id)
-                                                    .collect(),
-                                                new_portal: destinations.new_portal,
-                                            }
-                                        }
-                                    };
+                            //                 PortalLinkResult::Portals {
+                            //                     ids: destinations
+                            //                         .existing_portals
+                            //                         .iter()
+                            //                         .map(|p| p.id)
+                            //                         .collect(),
+                            //                     new_portal: destinations.new_portal,
+                            //                 }
+                            //             }
+                            //         };
 
-                                    show_link_result(
-                                        ui,
-                                        Some(&link_result),
-                                        &destination_id_to_name,
-                                    );
-                                });
+                            //         show_link_result(ui, Some(&link_result), &destinations_by_id);
+                            //     });
                         });
 
                         reorder_drag_rect.max.y = ui.min_rect().max.y;
@@ -743,7 +739,7 @@ enum PortalLinkResult {
 fn show_link_result(
     ui: &mut egui::Ui,
     result: Option<&PortalLinkResult>,
-    destination_id_to_name: &HashMap<PortalId, String>,
+    destinations_by_id: &HashMap<PortalId, &Portal>,
 ) {
     match result {
         None => {
@@ -754,16 +750,27 @@ fn show_link_result(
         }
         Some(PortalLinkResult::Portals { ids, new_portal }) => {
             if !ids.is_empty() {
-                let mut names = ids.iter().map(|id| {
-                    destination_id_to_name
-                        .get(id)
-                        .map(|s| s.as_str())
-                        .unwrap_or("<unknown>")
-                });
-                ui.strong(format!("Links to: {}", names.join(", ")));
+                let mut label_atoms = egui::Atoms::new("Links to: ");
+                let mut is_first = true;
+                for id in ids {
+                    if is_first {
+                        is_first = false;
+                    } else {
+                        label_atoms.push_right(", ");
+                    }
+                    let (name, color) = match destinations_by_id.get(id) {
+                        Some(p) => {
+                            let [r, g, b] = p.color;
+                            (p.display_name(), egui::Color32::from_rgb(r, g, b))
+                        }
+                        None => ("<unknown>", ui.visuals().weak_text_color()),
+                    };
+                    label_atoms.push_right(egui::RichText::new(name).color(color));
+                }
+                ui.add(egui::AtomLayout::new(label_atoms));
             }
             if *new_portal {
-                ui.colored_label(ui.visuals().warn_fg_color, "Generates new portal");
+                ui.colored_label(ui.visuals().error_fg_color, "Generates new portal");
             }
         }
     }
