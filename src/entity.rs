@@ -1,3 +1,5 @@
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 /// Description of an entity.
@@ -12,6 +14,18 @@ pub struct Entity {
     /// Whether the entity is a projectile, in which case it is possible to clip
     /// into the portal frame.
     pub is_projectile: bool,
+}
+
+impl fmt::Display for Entity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.width.fmt(f)?;
+        write!(f, "×")?;
+        self.height.fmt(f)?;
+        if f.alternate() && self.is_projectile {
+            write!(f, " projectile")?;
+        }
+        Ok(())
+    }
 }
 
 impl Entity {

@@ -1,0 +1,1 @@
+Projectiles can clip into the sides of portals because they are teleported before processing the collision with the portal frame.

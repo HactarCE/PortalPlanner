@@ -1,0 +1,3 @@
+When enabled, the plot will highlight the portal at the cursor regardless of dimension.
+
+When disabled, the plot will highlight the portal at the cursor only if it is in the current dimension.

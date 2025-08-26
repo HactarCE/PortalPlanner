@@ -61,6 +61,11 @@ impl Default for Camera {
 }
 
 impl Camera {
+    /// Resets the camera completely.
+    pub fn reset(&mut self) {
+        *self = Self::default()
+    }
+
     /// Returns the position of the camera in the given dimension.
     pub fn pos_in(self, dimension: Dimension) -> WorldPos {
         self.pos.convert_dimension(self.dimension, dimension)

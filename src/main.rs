@@ -24,28 +24,38 @@ pub use pos::{Axis, BlockPos, WorldPos};
 pub use region::{BlockRegion, WorldRegion};
 pub use world::{ConvertDimension, Dimension, World, WorldPortals};
 
+/// Application title.
+pub const TITLE: &str = "Portal Planner";
+
+const IS_WEB: bool = cfg!(target_arch = "wasm32");
+
 /// Scroll sensitivity override for egui, particularly when zooming in/out of
 /// the plot.
 pub const SCROLL_SENSITIVITY: f32 = 0.25;
 /// Path for loading & saving the portal configuration.
 pub const SAVE_FILE_PATH: &str = "world.json";
-/// Margin around each plot.
+/// Margin between plots.
 pub const PLOT_MARGIN: f32 = 8.0;
 
 /// Animation speed when switching dimensions.
 pub const ANIMATION_SPEED: f64 = 8.0;
 
-/// Ctrl+Z shortcut for undo.
-pub const CMD_Z: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
-/// Ctrl+Shift+Z shortcut for redo.
-pub const CMD_SHIFT_Z: egui::KeyboardShortcut = egui::KeyboardShortcut::new(
-    egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
-    egui::Key::Z,
-);
-/// Ctrl+Y shortcut for redo.
-pub const CMD_Y: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y);
+#[allow(missing_docs)]
+mod kbd_shortcuts {
+    use egui::Key;
+    use egui::KeyboardShortcut as Shortcut;
+    use egui::Modifiers as Mods;
+
+    /// Ctrl+Z shortcut for undo.
+    pub const CMD_Z: Shortcut = Shortcut::new(Mods::COMMAND, Key::Z);
+    /// Ctrl+Shift+Z shortcut for redo.
+    pub const CMD_SHIFT_Z: Shortcut = Shortcut::new(Mods::COMMAND.plus(Mods::SHIFT), Key::Z);
+    /// Ctrl+Y shortcut for redo.
+    pub const CMD_Y: Shortcut = Shortcut::new(Mods::COMMAND, Key::Y);
+
+    pub const SWITCH_DIMENSIONS: Shortcut = Shortcut::new(Mods::NONE, Key::Space);
+    pub const RESET_CAMERA: Shortcut = Shortcut::new(Mods::NONE, Key::Escape);
+}
 
 fn main() -> eframe::Result {
     env_logger::builder()
@@ -68,10 +78,12 @@ pub struct App {
     show_all_arrows: bool,
     arrow_coloring: ArrowColoring,
 
-    hide_zy_plot: bool,
+    show_zy_plot: bool,
+    show_both_portal_lists: bool,
 
     portals_hovered: PortalHoverState,
 
+    hover_either_dimension: bool,
     lock_portal_size: bool,
     entity: Entity,
 
@@ -86,8 +98,10 @@ pub struct App {
 impl App {
     /// Constructs the application state.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        cc.egui_ctx
-            .style_mut(|style| style.explanation_tooltips = true);
+        cc.egui_ctx.style_mut(|style| {
+            style.explanation_tooltips = true;
+            style.interaction.selectable_labels = false;
+        });
 
         let world: World = std::fs::read(SAVE_FILE_PATH)
             .ok()
@@ -105,10 +119,12 @@ impl App {
             show_all_arrows: false,
             arrow_coloring: ArrowColoring::default(),
 
-            hide_zy_plot: false,
+            show_zy_plot: true,
+            show_both_portal_lists: false,
 
             portals_hovered: PortalHoverState::default(),
 
+            hover_either_dimension: true,
             lock_portal_size: true,
             entity: Entity::PLAYER,
 
@@ -145,6 +161,9 @@ impl App {
         }
     }
 
+    fn toggle_camera_dimension(&mut self) {
+        self.set_camera_dimension(self.camera.dimension.other());
+    }
     fn set_camera_dimension(&mut self, new_camera_dimension: Dimension) {
         if new_camera_dimension != self.camera.dimension {
             let scale_factor = self.camera.dimension.scale() / new_camera_dimension.scale();
@@ -155,96 +174,82 @@ impl App {
         self.camera.set_dimension(new_camera_dimension);
     }
 
-    fn show_controls(&mut self, ui: &mut egui::Ui) {
-        let mut changed = false;
-
+    fn show_all_portal_lists(&mut self, ui: &mut egui::Ui) {
         self.portals_hovered.in_list = None;
-
-        ui.horizontal(|ui| {
-            ui.strong("View");
-
-            let mut new_camera_dimension = self.camera.dimension;
-            for dim in [Overworld, Nether] {
-                ui.selectable_value(&mut new_camera_dimension, dim, dim.to_string());
+        if self.show_both_portal_lists {
+            if ui.available_width() >= 800.0 {
+                ui.columns(2, |uis| {
+                    uis[0].group(|ui| self.show_portal_list(ui, Overworld, true));
+                    uis[1].group(|ui| self.show_portal_list(ui, Nether, true));
+                });
+            } else {
+                ui.group(|ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("portal_list")
+                        .show(ui, |ui| {
+                            self.show_portal_list(ui, Overworld, false);
+                            ui.separator();
+                            self.show_portal_list(ui, Nether, false);
+                        });
+                });
             }
-            self.set_camera_dimension(new_camera_dimension);
+        } else {
+            ui.group(|ui| self.show_portal_list(ui, self.camera.dimension, true));
+        }
+    }
 
-            show_world_pos_edit(ui, &mut self.camera.pos);
-
-            ui.checkbox(&mut self.hide_zy_plot, "Hide ZY plot");
-        });
-
+    fn show_entity_config(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.strong("Entity");
-            ui.menu_button("Load…", |ui| {
-                if ui.button("Player").clicked() {
-                    self.entity = Entity::PLAYER;
-                }
-                if ui.button("Ender pearl").clicked() {
-                    self.entity = Entity::ENDER_PEARL;
-                }
-                if ui.button("Arrow").clicked() {
-                    self.entity = Entity::ARROW;
-                }
-                if ui.button("Ghast").clicked() {
-                    self.entity = Entity::GHAST;
-                }
-                if ui.button("Item").clicked() {
-                    self.entity = Entity::ITEM;
-                }
-            });
             coordinate_label(ui, "Width");
             ui.add(
                 egui::DragValue::new(&mut self.entity.width)
-                    .range(0.0..=256.0)
+                    .range(0.0..=16.0)
                     .speed(0.01),
             );
             coordinate_label(ui, "Height");
             ui.add(
                 egui::DragValue::new(&mut self.entity.height)
-                    .range(0.0..=256.0)
+                    .range(0.0..=16.0)
                     .speed(0.01),
             );
-            ui.checkbox(&mut self.entity.is_projectile, "Projectile");
-        });
-
-        ui.separator();
-        ui.checkbox(&mut self.show_all_labels, "Show all labels");
-        ui.checkbox(&mut self.show_all_arrows, "Show all arrows");
-        ui.horizontal(|ui| {
-            ui.strong("Color arrows by");
-            ui.selectable_value(&mut self.arrow_coloring, ArrowColoring::BySource, "Source");
-            ui.selectable_value(
-                &mut self.arrow_coloring,
-                ArrowColoring::ByDestination,
-                "Destination",
-            );
+            ui.checkbox(&mut self.entity.is_projectile, "Projectile")
+                .on_hover_text(include_str!("resources/text/projectile.txt").trim());
         });
 
         ui.separator();
 
-        ui.horizontal(|ui| {
-            if ui.button("Add portal pair").clicked() {
-                self.add_portal_in_overworld();
-                self.add_portal_in_nether();
-                changed = true;
+        ui.horizontal_wrapped(|ui| {
+            for (name, entity) in [
+                ("Player", Entity::PLAYER),
+                ("Ghast", Entity::GHAST),
+                ("Item", Entity::ITEM),
+                ("Arrow", Entity::ARROW),
+                ("Ender pearl", Entity::ENDER_PEARL),
+            ] {
+                let mut atoms = egui::Atoms::new(name);
+                atoms.push_right(egui::Atom::grow());
+                atoms.push_right(egui::RichText::new(format!("{entity:.02}")).small());
+                ui.selectable_value(&mut self.entity, entity, name);
             }
-
-            ui.checkbox(&mut self.lock_portal_size, "Lock portal size");
         });
-
-        ui.columns(2, |uis| {
-            self.show_portal_list(&mut uis[0], Overworld);
-            self.show_portal_list(&mut uis[1], Nether);
-        });
-
-        if changed {
-            self.save_to_file();
-        }
     }
 
-    fn show_portal_list(&mut self, ui: &mut egui::Ui, dimension: Dimension) {
-        ui.heading(dimension.to_string());
+    fn show_portal_list(&mut self, ui: &mut egui::Ui, dimension: Dimension, scrollable: bool) {
+        if self.show_both_portal_lists {
+            ui.heading(dimension.to_string());
+        } else {
+            ui.horizontal(|ui| {
+                let mut new_camera_dimension = self.camera.dimension;
+                for dim in [Overworld, Nether] {
+                    ui.selectable_value(
+                        &mut new_camera_dimension,
+                        dim,
+                        egui::RichText::new(dim.to_string()).heading(),
+                    );
+                }
+                self.set_camera_dimension(new_camera_dimension);
+            });
+        }
 
         ui.columns(2, |uis| {
             if uis[0].button("Add portal").clicked() {
@@ -278,7 +283,7 @@ impl App {
                             test_point.convert_dimension(dimension, self.camera.dimension);
                     }
 
-                    show_world_pos_edit(ui, test_point);
+                    show_world_pos_edit(ui, test_point, Some(3));
 
                     let destination_portals = self
                         .world
@@ -312,28 +317,23 @@ impl App {
         let mut reorder_drag_start = None;
         let mut reorder_drag_end = None;
         let mut remove = None;
-        egui::ScrollArea::vertical()
-            .id_salt(dimension)
-            .auto_shrink([false; 2])
-            .show(ui, |ui| {
-                for (i, portal) in self.world.portals[dimension].iter_mut().enumerate() {
-                    if i > 0 {
-                        ui.separator();
-                    }
+        let mut show_portal_list_contents = |ui: &mut egui::Ui| {
+            for (i, portal) in self.world.portals[dimension].iter_mut().enumerate() {
+                if i > 0 {
+                    ui.separator();
+                }
 
-                    const OUTLINE_WIDTH: f32 = 2.0;
+                const OUTLINE_WIDTH: f32 = 2.0;
 
-                    let r = egui::Frame::new()
-                        .outer_margin(OUTLINE_WIDTH)
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let mut reorder_drag_rect = egui::Rect::from_min_size(
-                                    ui.cursor().min,
-                                    egui::vec2(12.0, 18.0),
-                                );
-                                ui.advance_cursor_after_rect(reorder_drag_rect);
+                let r = egui::Frame::new()
+                    .outer_margin(OUTLINE_WIDTH)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let mut reorder_drag_rect =
+                                egui::Rect::from_min_size(ui.cursor().min, egui::vec2(12.0, 18.0));
+                            ui.advance_cursor_after_rect(reorder_drag_rect);
 
-                                ui.vertical(|ui| {
+                            ui.vertical(|ui| {
                                 egui::collapsing_header::CollapsingState::load_with_default_open(
                                     ui.ctx(),
                                     egui::Id::new(portal.id).with("header"),
@@ -395,103 +395,76 @@ impl App {
                                     self.cached_links.get(&portal.id),
                                     &portals_by_id,
                                 );
-
-                                // ui.small_button("Calculate naively (expensive)")
-                                //     .on_hover_ui(|ui| {
-                                //         let destination_dimension = dimension.other();
-                                //         let link_result = match portal
-                                //             .entity_collision_region(self.entity)
-                                //         {
-                                //             None => PortalLinkResult::EntityWontFit,
-                                //             Some(entry_region) => {
-                                //                 let destination_region = entry_region
-                                //                     .convert_dimension(
-                                //                         dimension,
-                                //                         destination_dimension,
-                                //                     );
-                                //                 let destinations = self
-                                //                     .last_saved_state
-                                //                     .portals
-                                //                     .portal_destinations_naive(
-                                //                         destination_dimension,
-                                //                         destination_region.block_region_containing(),
-                                //                     );
-
-                                //                 PortalLinkResult::Portals {
-                                //                     ids: destinations
-                                //                         .existing_portals
-                                //                         .iter()
-                                //                         .map(|p| p.id)
-                                //                         .collect(),
-                                //                     new_portal: destinations.new_portal,
-                                //                 }
-                                //             }
-                                //         };
-
-                                //         show_link_result(ui, Some(&link_result), &destinations_by_id);
-                                //     });
                             });
 
-                                reorder_drag_rect.max.y = ui.min_rect().max.y;
-                                let r = ui.interact(
-                                    reorder_drag_rect,
-                                    egui::Id::new(portal.id).with("reorder"),
-                                    egui::Sense::drag(),
-                                );
-                                let color;
-                                if r.dragged() {
-                                    reorder_drag_start = Some(i);
-                                    self.portals_hovered.in_list = Some(portal.id);
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                                    color = ui.visuals().strong_text_color();
-                                } else if r.hovered() {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-                                    color = ui.visuals().text_color();
-                                } else {
-                                    color = ui.visuals().weak_text_color();
+                            reorder_drag_rect.max.y = ui.min_rect().max.y;
+                            let r = ui.interact(
+                                reorder_drag_rect,
+                                egui::Id::new(portal.id).with("reorder"),
+                                egui::Sense::drag(),
+                            );
+                            let color;
+                            if r.dragged() {
+                                reorder_drag_start = Some(i);
+                                self.portals_hovered.in_list = Some(portal.id);
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                color = ui.visuals().strong_text_color();
+                            } else if r.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                                color = ui.visuals().text_color();
+                            } else {
+                                color = ui.visuals().weak_text_color();
+                            }
+                            let center = reorder_drag_rect.center();
+                            let sp = 5.0;
+                            for dx in [-sp / 2.0, sp / 2.0] {
+                                for dy in [-sp, 0.0, sp] {
+                                    ui.painter().circle_filled(
+                                        center + egui::vec2(dx, dy),
+                                        1.5,
+                                        color,
+                                    );
                                 }
-                                let center = reorder_drag_rect.center();
-                                let sp = 5.0;
-                                for dx in [-sp / 2.0, sp / 2.0] {
-                                    for dy in [-sp, 0.0, sp] {
-                                        ui.painter().circle_filled(
-                                            center + egui::vec2(dx, dy),
-                                            1.5,
-                                            color,
-                                        );
-                                    }
-                                }
-                            });
+                            }
                         });
+                    });
 
-                    let rect = r.response.rect.intersect(ui.clip_rect());
-                    let rect_contains = |p: Option<_>| p.is_some_and(|it| rect.contains(it));
-                    let hovering_this =
-                        ui.input(|input| rect_contains(input.pointer.interact_pos()));
-                    let dragging = ui.input(|input| input.pointer.is_decidedly_dragging());
-                    if hovering_this {
-                        if dragging {
-                            reorder_drag_end = Some(i);
-                        } else {
-                            self.portals_hovered.in_list = Some(portal.id);
-                        }
-                    }
-
-                    if self.portals_hovered.contains(portal.id) {
-                        let [red, g, b] = portal.color;
-                        ui.painter().rect_stroke(
-                            r.response.rect,
-                            4.0,
-                            (OUTLINE_WIDTH, egui::Color32::from_rgb(red, g, b)),
-                            egui::StrokeKind::Outside,
-                        );
-                    }
-                    if self.portals_hovered.in_plot.iter().exactly_one().ok() == Some(&portal.id) {
-                        r.response
-                            .scroll_to_me_animation(None, egui::style::ScrollAnimation::none());
+                let rect = r.response.rect.intersect(ui.clip_rect());
+                let rect_contains = |p: Option<_>| p.is_some_and(|it| rect.contains(it));
+                let hovering_this = ui.input(|input| rect_contains(input.pointer.interact_pos()));
+                let dragging = ui.input(|input| input.pointer.is_decidedly_dragging());
+                if hovering_this {
+                    if dragging {
+                        reorder_drag_end = Some(i);
+                    } else {
+                        self.portals_hovered.in_list = Some(portal.id);
                     }
                 }
-            });
+
+                if self.portals_hovered.contains(portal.id) {
+                    let [red, g, b] = portal.color;
+                    ui.painter().rect_stroke(
+                        r.response.rect,
+                        4.0,
+                        (OUTLINE_WIDTH, egui::Color32::from_rgb(red, g, b)),
+                        egui::StrokeKind::Outside,
+                    );
+                }
+                if self.portals_hovered.in_plot.iter().exactly_one().ok() == Some(&portal.id) {
+                    r.response.scroll_to_me(None);
+                }
+            }
+        };
+        if scrollable {
+            egui::ScrollArea::vertical()
+                .id_salt(("portal_list", dimension))
+                .auto_shrink([false; 2])
+                .show(ui, show_portal_list_contents);
+        } else {
+            // can't use `ScrollArea::new([false; 2])` because then
+            // `scroll_to_me()` wouldn't work.
+            show_portal_list_contents(ui);
+        }
 
         if let (Some(i), Some(j)) = (reorder_drag_start, reorder_drag_end) {
             if i < j {
@@ -532,7 +505,7 @@ impl App {
             Plane::XZ => 1.0,
         };
 
-        let mut plot = egui_plot::Plot::new(plane)
+        let mut plot = egui_plot::Plot::new(("plot", plane))
             .x_axis_label(match plane {
                 Plane::XY | Plane::XZ => "X",
                 Plane::ZY => "Z",
@@ -598,19 +571,11 @@ impl App {
             .map(|point| plane.plot_to_world(point, *new_camera))
             .map(|block_pos| block_pos.into())
         {
-            let BlockPos { x, y, z } = hovered_world_pos;
-            for portal in &self.world.portals[new_camera.dimension] {
-                let x_range = portal.region.min.x..=portal.region.max.x;
-                let y_range = portal.region.min.y..=portal.region.max.y;
-                let z_range = portal.region.min.z..=portal.region.max.z;
-                let hovering_portal = match plane {
-                    Plane::XY => x_range.contains(&x) && y_range.contains(&y),
-                    Plane::XZ => x_range.contains(&x) && z_range.contains(&z),
-                    Plane::ZY => z_range.contains(&z) && y_range.contains(&y),
-                };
-                if hovering_portal {
-                    self.portals_hovered.in_plot_for_next_frame.push(portal.id);
-                }
+            if self.hover_either_dimension {
+                self.process_portal_hovers(Overworld, plane, hovered_world_pos);
+                self.process_portal_hovers(Nether, plane, hovered_world_pos);
+            } else {
+                self.process_portal_hovers(new_camera.dimension, plane, hovered_world_pos);
             }
         }
 
@@ -838,6 +803,25 @@ impl App {
         }
     }
 
+    fn process_portal_hovers(&mut self, dimension: Dimension, plane: Plane, hovered_pos: WorldPos) {
+        let WorldPos { x, y, z } = hovered_pos;
+        for portal in &self.world.portals[dimension] {
+            let WorldRegion { min, max } = WorldRegion::from(portal.region)
+                .convert_dimension(dimension, self.camera.dimension);
+            let x_range = min.x..=max.x;
+            let y_range = min.y..=max.y;
+            let z_range = min.z..=max.z;
+            let is_hovering_portal = match plane {
+                Plane::XY => x_range.contains(&x) && y_range.contains(&y),
+                Plane::XZ => x_range.contains(&x) && z_range.contains(&z),
+                Plane::ZY => z_range.contains(&z) && y_range.contains(&y),
+            };
+            if is_hovering_portal {
+                self.portals_hovered.in_plot_for_next_frame.push(portal.id);
+            }
+        }
+    }
+
     fn calculate_portal_link_result(
         &self,
         portal: &Portal,
@@ -887,6 +871,169 @@ impl App {
             }
         }
     }
+
+    fn show_menu_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        collapse_menu: bool,
+        collapse_camera_controls: bool,
+    ) {
+        fn menu_no_autoclose<'a>(
+            ui: &mut egui::Ui,
+            atoms: impl egui::IntoAtoms<'a>,
+            add_contents: impl FnOnce(&mut egui::Ui),
+        ) {
+            let config = egui::containers::menu::MenuConfig::new()
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+            if egui::containers::menu::is_in_menu(ui) {
+                egui::containers::menu::SubMenuButton::new(atoms)
+                    .config(config)
+                    .ui(ui, add_contents);
+            } else {
+                egui::containers::menu::MenuButton::new(atoms)
+                    .config(config)
+                    .ui(ui, add_contents);
+            }
+        }
+
+        egui::MenuBar::new().ui(ui, |ui| {
+            let mut menu_contents = |ui: &mut egui::Ui| {
+                ui.menu_button("File", |ui| {
+                    ui.button("New");
+                    ui.separator();
+                    ui.button("Import…");
+                    ui.button("Export…");
+                    ui.separator();
+                    if !IS_WEB {
+                        ui.button("Open…");
+                    }
+                    ui.button("Open from URL…");
+                    if !IS_WEB {
+                        ui.separator();
+                        ui.button("Save");
+                        ui.button("Save As…");
+                    }
+                    ui.separator();
+                    ui.checkbox(&mut true, "Auto Save");
+
+                    // no File->Quit on web pages
+                    if !IS_WEB {
+                        #[cfg(target_os = "macos")]
+                        let exit_text = "Quit";
+                        #[cfg(not(target_os = "macos"))]
+                        let exit_text = "Exit";
+
+                        ui.separator();
+                        if ui.button(exit_text).clicked() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    }
+                });
+
+                menu_no_autoclose(ui, "Edit", |ui| {
+                    ui.add_enabled_ui(!self.undo_history.is_empty(), |ui| {
+                        if ui.button("Undo").clicked() {
+                            self.undo();
+                        }
+                    });
+                    ui.add_enabled_ui(!self.redo_history.is_empty(), |ui| {
+                        if ui.button("Redo").clicked() {
+                            self.redo();
+                        }
+                    });
+                });
+
+                menu_no_autoclose(ui, "View", |ui| {
+                    let button = egui::Button::new("Switch dimension")
+                        .shortcut_text(ui.ctx().format_shortcut(&kbd_shortcuts::SWITCH_DIMENSIONS));
+                    if ui.add(button).clicked() {
+                        self.toggle_camera_dimension();
+                        ui.close();
+                    }
+
+                    let button = egui::Button::new("Reset camera")
+                        .shortcut_text(ui.ctx().format_shortcut(&kbd_shortcuts::RESET_CAMERA));
+                    if ui.add(button).clicked() {
+                        self.camera.reset();
+                        ui.close();
+                    }
+
+                    ui.separator();
+
+                    ui.checkbox(&mut self.show_zy_plot, "Show ZY Plot");
+                    ui.checkbox(&mut self.show_both_portal_lists, "Show Both Portal Lists");
+
+                    ui.separator();
+
+                    ui.checkbox(&mut self.show_all_labels, "Show Portal Labels");
+                    ui.checkbox(&mut self.show_all_arrows, "Show Link Arrows");
+                    ui.horizontal(|ui| {
+                        ui.strong("Color arrows by");
+                        ui.selectable_value(
+                            &mut self.arrow_coloring,
+                            ArrowColoring::BySource,
+                            "Source",
+                        );
+                        ui.selectable_value(
+                            &mut self.arrow_coloring,
+                            ArrowColoring::ByDestination,
+                            "Destination",
+                        );
+                    });
+                });
+
+                menu_no_autoclose(ui, "Settings", |ui| {
+                    ui.checkbox(
+                        &mut self.hover_either_dimension,
+                        "Hover Portals In Both Dimensions",
+                    )
+                    .on_hover_text(
+                        include_str!("resources/text/hover_either_dimension.txt").trim(),
+                    );
+                    ui.checkbox(&mut self.lock_portal_size, "Lock Portal Size When Editing")
+                        .on_hover_text(include_str!("resources/text/lock_portal_size.txt").trim());
+                    ui.separator();
+                    egui::global_theme_preference_buttons(ui);
+                });
+            };
+
+            if collapse_menu {
+                ui.menu_button("Menu", menu_contents);
+            } else {
+                menu_contents(ui);
+            }
+
+            ui.separator();
+
+            let mut camera_controls_contents = |ui: &mut egui::Ui| {
+                ui.horizontal(|ui| {
+                    let mut new_camera_dimension = self.camera.dimension;
+                    for dim in [Overworld, Nether] {
+                        ui.selectable_value(&mut new_camera_dimension, dim, dim.to_string());
+                    }
+                    self.set_camera_dimension(new_camera_dimension);
+                });
+
+                if !collapse_camera_controls {
+                    ui.separator();
+                }
+
+                show_world_pos_edit(ui, &mut self.camera.pos, Some(0));
+            };
+
+            if collapse_camera_controls {
+                menu_no_autoclose(ui, "Position", camera_controls_contents);
+            } else {
+                camera_controls_contents(ui);
+            }
+
+            ui.separator();
+
+            menu_no_autoclose(ui, "Entity size", |ui| self.show_entity_config(ui));
+
+            ui_unless_overflow(ui, |ui| ui.small(format!("{:#.02}", self.entity)));
+        });
+    }
 }
 
 impl eframe::App for App {
@@ -903,6 +1050,34 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
+        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+            ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+            ui_unless_overflow(ui, |ui| self.show_menu_bar(ui, false, false))
+                .or_else(|| ui_unless_overflow(ui, |ui| self.show_menu_bar(ui, false, true)))
+                .unwrap_or_else(|| self.show_menu_bar(ui, true, true))
+        });
+
+        egui::TopBottomPanel::bottom("bottom_bar").show(ctx, |ui| {
+            ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+            let sp = std::mem::take(&mut ui.spacing_mut().item_spacing);
+            ui.horizontal(|ui| {
+                egui::ScrollArea::horizontal()
+                    .id_salt("bottom_bar")
+                    .auto_shrink(false)
+                    .show(ui, |ui| {
+                        show_credits(ui);
+                        ui.add_space(sp.x);
+                        ui.separator();
+                        ui.add_space(sp.x);
+                        show_powered_by_egui(ui);
+                        ui.add_space(sp.x);
+                        ui.separator();
+                        ui.add_space(sp.x);
+                        show_source_code_link(ui);
+                    });
+            });
+        });
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
 
@@ -913,10 +1088,11 @@ impl eframe::App for App {
             let egui::Vec2 { x, y } = (r.size() / 2.0).floor_ui();
 
             use egui::{Rect, vec2};
-            let left_bottom = Rect::from_two_pos(center + vec2(-x, y), center).shrink(PLOT_MARGIN);
-            let right_bottom = Rect::from_two_pos(center + vec2(x, y), center).shrink(PLOT_MARGIN);
-            let left_top = Rect::from_two_pos(center + vec2(-x, -y), center).shrink(PLOT_MARGIN);
-            let right_top = Rect::from_two_pos(center + vec2(x, -y), center).shrink(PLOT_MARGIN);
+            let m = PLOT_MARGIN / 2.0;
+            let left_bottom = Rect::from_two_pos(center + vec2(-x, y), center + vec2(-m, m));
+            let right_bottom = Rect::from_two_pos(center + vec2(x, y), center + vec2(m, m));
+            let left_top = Rect::from_two_pos(center + vec2(-x, -y), center + vec2(-m, -m));
+            let right_top = Rect::from_two_pos(center + vec2(x, -y), center + vec2(m, -m));
 
             self.portals_hovered.in_plot =
                 std::mem::take(&mut self.portals_hovered.in_plot_for_next_frame);
@@ -925,11 +1101,12 @@ impl eframe::App for App {
                 (Plane::ZY, right_bottom),
                 (Plane::XZ, left_top),
             ] {
-                if self.hide_zy_plot && plane == Plane::ZY {
+                if !self.show_zy_plot && plane == Plane::ZY {
                     continue;
                 }
                 ui.put(rect, |ui: &mut egui::Ui| {
-                    self.show_view(ui, plane, &mut new_camera)
+                    ui.group(|ui| self.show_view(ui, plane, &mut new_camera))
+                        .response
                 });
             }
             self.camera = new_camera;
@@ -941,15 +1118,13 @@ impl eframe::App for App {
                 .step((now - self.animation_state.last_frame).as_secs_f64());
             self.animation_state.last_frame = now;
 
-            let controls_rect = if self.hide_zy_plot {
-                right_top.union(right_bottom)
-            } else {
+            let controls_rect = if self.show_zy_plot {
                 right_top
+            } else {
+                right_top.union(right_bottom)
             };
             ui.scope_builder(egui::UiBuilder::new().max_rect(controls_rect), |ui| {
-                egui::ScrollArea::horizontal()
-                    .auto_shrink([false; 2])
-                    .show(ui, |ui| self.show_controls(ui))
+                self.show_all_portal_lists(ui)
             });
 
             let is_text_field_active = ui.ctx().wants_keyboard_input();
@@ -964,19 +1139,22 @@ impl eframe::App for App {
                     }
 
                     // Consume the most specific shortcut first
-                    if input.consume_shortcut(&CMD_SHIFT_Z) || input.consume_shortcut(&CMD_Y) {
+                    if input.consume_shortcut(&kbd_shortcuts::CMD_SHIFT_Z)
+                        || input.consume_shortcut(&kbd_shortcuts::CMD_Y)
+                    {
                         self.redo();
                         self.save_to_file();
-                    } else if input.consume_shortcut(&CMD_Z) {
+                    } else if input.consume_shortcut(&kbd_shortcuts::CMD_Z) {
                         self.undo();
                         self.save_to_file();
                     }
 
-                    if input.consume_shortcut(&egui::KeyboardShortcut::new(
-                        egui::Modifiers::NONE,
-                        egui::Key::Space,
-                    )) {
-                        self.set_camera_dimension(self.camera.dimension.other());
+                    if input.consume_shortcut(&kbd_shortcuts::SWITCH_DIMENSIONS) {
+                        self.toggle_camera_dimension();
+                    }
+
+                    if input.consume_shortcut(&kbd_shortcuts::RESET_CAMERA) {
+                        self.camera.reset();
                     }
                 }
             });
@@ -1000,20 +1178,28 @@ fn show_block_pos_edit(ui: &mut egui::Ui, BlockPos { x, y, z }: &mut BlockPos) {
     });
 }
 
-fn show_world_pos_edit(ui: &mut egui::Ui, WorldPos { x, y, z }: &mut WorldPos) -> egui::Response {
+fn show_world_pos_edit(
+    ui: &mut egui::Ui,
+    WorldPos { x, y, z }: &mut WorldPos,
+    fixed_decimals: Option<usize>,
+) -> egui::Response {
+    let make_drag_value = |value| {
+        let dv = egui::DragValue::new(value).speed(0.1);
+        match fixed_decimals {
+            Some(num_decimals) => dv.fixed_decimals(num_decimals),
+            None => dv,
+        }
+    };
+
     ui.horizontal(|ui| {
         coordinate_label(ui, "X");
-        ui.add(egui::DragValue::new(x).speed(0.1));
+        ui.add(make_drag_value(x));
 
         coordinate_label(ui, "Y");
-        ui.add(
-            egui::DragValue::new(y)
-                .speed(0.1)
-                .range(Overworld.y_min()..=Overworld.y_max() + 1),
-        );
+        ui.add(make_drag_value(y).range(Overworld.y_min()..=Overworld.y_max() + 1));
 
         coordinate_label(ui, "Z");
-        ui.add(egui::DragValue::new(z).speed(0.1));
+        ui.add(make_drag_value(z));
     })
     .response
 }
@@ -1147,4 +1333,56 @@ impl PortalHoverState {
     fn contains(&self, id: PortalId) -> bool {
         self.in_list == Some(id) || self.in_plot.contains(&id)
     }
+}
+
+fn show_credits(ui: &mut egui::Ui) {
+    ui.label(format!("{TITLE} v{} by ", env!("CARGO_PKG_VERSION")));
+    ui.hyperlink_to("Andrew Farkas", "https://ajfarkas.dev/");
+}
+
+fn show_powered_by_egui(ui: &mut egui::Ui) {
+    ui.label("Powered by ");
+    ui.hyperlink_to("egui", "https://github.com/emilk/egui");
+    ui.label(" and ");
+    ui.hyperlink_to(
+        "eframe",
+        "https://github.com/emilk/egui/tree/master/crates/eframe",
+    );
+}
+
+fn show_source_code_link(ui: &mut egui::Ui) {
+    ui.hyperlink_to(
+        egui::RichText::new(" source code").small(),
+        env!("CARGO_PKG_REPOSITORY"),
+    );
+}
+
+/// Returns `true` if the UI fits in the available space, or `false` if it needs
+/// more space.
+///
+/// Uses a sizing pass. No visible UI is displayed.
+fn does_ui_fit(ui: &mut egui::Ui, f: impl FnOnce(&mut egui::Ui)) -> bool {
+    let available_size = ui.available_size();
+    let r = ui
+        .new_child(egui::UiBuilder::new().sizing_pass().invisible())
+        .scope(f)
+        .response
+        .rect;
+    // Allow overflow by one pixel in case of rounding error.
+    r.width() < available_size.x + 1.0 && r.height() < available_size.y + 1.0
+}
+/// Shows UI using `f` if it can be done in the available space (determined
+/// automatically using a sizing pass), or displays nothing and returns `None`
+/// if the UI does not fit.
+///
+/// Always returns `None` if `ui.is_sizing_pass()`.
+fn ui_unless_overflow<R>(ui: &mut egui::Ui, mut f: impl FnMut(&mut egui::Ui) -> R) -> Option<R> {
+    if ui.is_sizing_pass() {
+        return None;
+    }
+
+    does_ui_fit(ui, |ui| {
+        f(ui);
+    })
+    .then(|| f(ui))
 }
