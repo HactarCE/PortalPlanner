@@ -1,6 +1,6 @@
 //! Tool for planning Minecraft nether portal linkages.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use egui::Widget;
 use egui::emath::GuiRounding;
@@ -16,7 +16,6 @@ mod world;
 
 pub use Dimension::{Nether, Overworld};
 pub use camera::{Camera, Plane};
-use egui_plot::PlotPoint;
 pub use entity::Entity;
 pub use id::PortalId;
 pub use portal::{Portal, PortalAxis};
@@ -64,6 +63,13 @@ pub struct App {
     camera: Camera,
     animation_state: AnimationState,
 
+    show_all_labels: bool,
+    show_all_arrows: bool,
+    arrow_coloring: ArrowColoring,
+
+    hovered_portals: Vec<PortalId>,
+    new_hovered_portals: Vec<PortalId>,
+
     lock_portal_size: bool,
     entity: Entity,
 
@@ -92,6 +98,13 @@ impl App {
             world,
             camera: Camera::default(),
             animation_state: AnimationState::default(),
+
+            show_all_labels: true,
+            show_all_arrows: false,
+            arrow_coloring: ArrowColoring::default(),
+
+            hovered_portals: vec![],
+            new_hovered_portals: vec![],
 
             lock_portal_size: true,
             entity: Entity::PLAYER,
@@ -129,8 +142,20 @@ impl App {
         }
     }
 
+    fn set_camera_dimension(&mut self, new_camera_dimension: Dimension) {
+        if new_camera_dimension != self.camera.dimension {
+            let scale_factor = self.camera.dimension.scale() / new_camera_dimension.scale();
+            self.animation_state.aspect_ratio_scale /= scale_factor;
+            self.camera.width *= scale_factor;
+            self.camera.height *= scale_factor;
+        }
+        self.camera.set_dimension(new_camera_dimension);
+    }
+
     fn show_controls(&mut self, ui: &mut egui::Ui) {
         let mut changed = false;
+
+        self.hovered_portals = std::mem::take(&mut self.new_hovered_portals);
 
         ui.horizontal(|ui| {
             ui.strong("View");
@@ -139,13 +164,7 @@ impl App {
             for dim in [Overworld, Nether] {
                 ui.selectable_value(&mut new_camera_dimension, dim, dim.to_string());
             }
-            if new_camera_dimension != self.camera.dimension {
-                let scale_factor = self.camera.dimension.scale() / new_camera_dimension.scale();
-                self.animation_state.aspect_ratio_scale /= scale_factor;
-                self.camera.width *= scale_factor;
-                self.camera.height *= scale_factor;
-            }
-            self.camera.set_dimension(new_camera_dimension);
+            self.set_camera_dimension(new_camera_dimension);
 
             show_world_pos_edit(ui, &mut self.camera.pos, self.camera.dimension);
         });
@@ -174,6 +193,19 @@ impl App {
             coordinate_label(ui, "Height");
             ui.add(egui::DragValue::new(&mut self.entity.height).range(0.0..=256.0));
             ui.checkbox(&mut self.entity.is_projectile, "Projectile");
+        });
+
+        ui.separator();
+        ui.checkbox(&mut self.show_all_labels, "Show all labels");
+        ui.checkbox(&mut self.show_all_arrows, "Show all arrows");
+        ui.horizontal(|ui| {
+            ui.strong("Color arrows by");
+            ui.selectable_value(&mut self.arrow_coloring, ArrowColoring::BySource, "Source");
+            ui.selectable_value(
+                &mut self.arrow_coloring,
+                ArrowColoring::ByDestination,
+                "Destination",
+            );
         });
 
         ui.separator();
@@ -227,138 +259,178 @@ impl App {
                         ui.separator();
                     }
 
-                    let r = ui.horizontal(|ui| {
-                        let mut reorder_drag_rect =
-                            egui::Rect::from_min_size(ui.cursor().min, egui::vec2(12.0, 18.0));
-                        ui.advance_cursor_after_rect(reorder_drag_rect);
+                    const OUTLINE_WIDTH: f32 = 2.0;
 
-                        ui.vertical(|ui| {
-                            egui::collapsing_header::CollapsingState::load_with_default_open(
-                                ui.ctx(),
-                                egui::Id::new(portal.id).with("header"),
-                                false,
-                            )
-                            .show_header(ui, |ui| {
-                                egui::Sides::new().shrink_left().show(
-                                    ui,
-                                    |ui| {
-                                        ui.color_edit_button_srgb(&mut portal.color);
-
-                                        ui.horizontal(|ui| {
-                                            egui::TextEdit::singleline(&mut portal.name)
-                                                .hint_text("Portal name")
-                                                .show(ui);
-                                        });
-                                    },
-                                    |ui| {
-                                        if ui.button("🗑").clicked() {
-                                            remove = Some(i);
-                                        }
-                                    },
+                    let r = egui::Frame::new()
+                        .outer_margin(OUTLINE_WIDTH)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let mut reorder_drag_rect = egui::Rect::from_min_size(
+                                    ui.cursor().min,
+                                    egui::vec2(12.0, 18.0),
                                 );
-                            })
-                            .body(|ui| {
+                                ui.advance_cursor_after_rect(reorder_drag_rect);
+
                                 ui.vertical(|ui| {
-                                    portal.adjust_axis(|axis| {
-                                        ui.horizontal(|ui| {
-                                            ui.label("Facing");
-                                            ui.selectable_value(axis, PortalAxis::X, "X");
-                                            ui.selectable_value(axis, PortalAxis::Z, "Z");
+                                egui::collapsing_header::CollapsingState::load_with_default_open(
+                                    ui.ctx(),
+                                    egui::Id::new(portal.id).with("header"),
+                                    false,
+                                )
+                                .show_header(ui, |ui| {
+                                    egui::Sides::new().shrink_left().show(
+                                        ui,
+                                        |ui| {
+                                            ui.color_edit_button_srgb(&mut portal.color);
+
+                                            ui.horizontal(|ui| {
+                                                egui::TextEdit::singleline(&mut portal.name)
+                                                    .hint_text("Portal name")
+                                                    .show(ui);
+                                            });
+                                        },
+                                        |ui| {
+                                            if ui.button("🗑").clicked() {
+                                                remove = Some(i);
+                                            }
+                                        },
+                                    );
+                                })
+                                .body(|ui| {
+                                    ui.vertical(|ui| {
+                                        portal.adjust_axis(|axis| {
+                                            ui.horizontal(|ui| {
+                                                ui.label("Facing");
+                                                ui.selectable_value(axis, PortalAxis::X, "X");
+                                                ui.selectable_value(axis, PortalAxis::Z, "Z");
+                                            });
                                         });
-                                    });
 
-                                    portal.adjust_min(
-                                        |min| show_block_pos_edit(ui, min),
-                                        self.lock_portal_size,
-                                        dimension,
-                                    );
+                                        portal.adjust_min(
+                                            |min| show_block_pos_edit(ui, min),
+                                            self.lock_portal_size,
+                                            dimension,
+                                        );
 
-                                    portal.adjust_max(
-                                        |max| show_block_pos_edit(ui, max),
-                                        self.lock_portal_size,
-                                        dimension,
-                                    );
+                                        portal.adjust_max(
+                                            |max| show_block_pos_edit(ui, max),
+                                            self.lock_portal_size,
+                                            dimension,
+                                        );
 
-                                    ui.horizontal(|ui| {
-                                        portal.adjust_width(|w| dv_i64(ui, "Width", w));
-                                        portal
-                                            .adjust_height(|h| dv_i64(ui, "Height", h), dimension);
+                                        ui.horizontal(|ui| {
+                                            portal.adjust_width(|w| dv_i64(ui, "Width", w));
+                                            portal.adjust_height(
+                                                |h| dv_i64(ui, "Height", h),
+                                                dimension,
+                                            );
+                                        });
                                     });
                                 });
+
+                                show_link_result(
+                                    ui,
+                                    self.cached_links.get(&portal.id),
+                                    &portals_by_id,
+                                );
+
+                                // ui.small_button("Calculate naively (expensive)")
+                                //     .on_hover_ui(|ui| {
+                                //         let destination_dimension = dimension.other();
+                                //         let link_result = match portal
+                                //             .entity_collision_region(self.entity)
+                                //         {
+                                //             None => PortalLinkResult::EntityWontFit,
+                                //             Some(entry_region) => {
+                                //                 let destination_region = entry_region
+                                //                     .convert_dimension(
+                                //                         dimension,
+                                //                         destination_dimension,
+                                //                     );
+                                //                 let destinations = self
+                                //                     .last_saved_state
+                                //                     .portals
+                                //                     .portal_destinations_naive(
+                                //                         destination_dimension,
+                                //                         destination_region.block_region_containing(),
+                                //                     );
+
+                                //                 PortalLinkResult::Portals {
+                                //                     ids: destinations
+                                //                         .existing_portals
+                                //                         .iter()
+                                //                         .map(|p| p.id)
+                                //                         .collect(),
+                                //                     new_portal: destinations.new_portal,
+                                //                 }
+                                //             }
+                                //         };
+
+                                //         show_link_result(ui, Some(&link_result), &destinations_by_id);
+                                //     });
                             });
 
-                            show_link_result(ui, self.cached_links.get(&portal.id), &portals_by_id);
-
-                            // ui.small_button("Calculate naively (expensive)")
-                            //     .on_hover_ui(|ui| {
-                            //         let destination_dimension = dimension.other();
-                            //         let link_result = match portal
-                            //             .entity_collision_region(self.entity)
-                            //         {
-                            //             None => PortalLinkResult::EntityWontFit,
-                            //             Some(entry_region) => {
-                            //                 let destination_region = entry_region
-                            //                     .convert_dimension(
-                            //                         dimension,
-                            //                         destination_dimension,
-                            //                     );
-                            //                 let destinations = self
-                            //                     .last_saved_state
-                            //                     .portals
-                            //                     .portal_destinations_naive(
-                            //                         destination_dimension,
-                            //                         destination_region.block_region_containing(),
-                            //                     );
-
-                            //                 PortalLinkResult::Portals {
-                            //                     ids: destinations
-                            //                         .existing_portals
-                            //                         .iter()
-                            //                         .map(|p| p.id)
-                            //                         .collect(),
-                            //                     new_portal: destinations.new_portal,
-                            //                 }
-                            //             }
-                            //         };
-
-                            //         show_link_result(ui, Some(&link_result), &destinations_by_id);
-                            //     });
+                                reorder_drag_rect.max.y = ui.min_rect().max.y;
+                                let r = ui.interact(
+                                    reorder_drag_rect,
+                                    egui::Id::new(portal.id).with("reorder"),
+                                    egui::Sense::drag(),
+                                );
+                                let color;
+                                if r.dragged() {
+                                    reorder_drag_source = Some(i);
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                    color = ui.visuals().strong_text_color();
+                                } else if r.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                                    color = ui.visuals().text_color();
+                                } else {
+                                    color = ui.visuals().weak_text_color();
+                                }
+                                let center = reorder_drag_rect.center();
+                                let sp = 5.0;
+                                for dx in [-sp / 2.0, sp / 2.0] {
+                                    for dy in [-sp, 0.0, sp] {
+                                        ui.painter().circle_filled(
+                                            center + egui::vec2(dx, dy),
+                                            1.5,
+                                            color,
+                                        );
+                                    }
+                                }
+                            });
                         });
 
-                        reorder_drag_rect.max.y = ui.min_rect().max.y;
-                        let r = ui.interact(
-                            reorder_drag_rect,
-                            egui::Id::new(portal.id).with("reorder"),
-                            egui::Sense::drag(),
-                        );
-                        let color;
-                        if r.dragged() {
-                            reorder_drag_source = Some(i);
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                            color = ui.visuals().strong_text_color();
-                        } else if r.hovered() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-                            color = ui.visuals().text_color();
-                        } else {
-                            color = ui.visuals().weak_text_color();
-                        }
-                        let center = reorder_drag_rect.center();
-                        let sp = 5.0;
-                        for dx in [-sp / 2.0, sp / 2.0] {
-                            for dy in [-sp, 0.0, sp] {
-                                ui.painter()
-                                    .circle_filled(center + egui::vec2(dx, dy), 1.5, color);
-                            }
-                        }
-                    });
-
                     let rect = r.response.rect.intersect(ui.clip_rect());
-                    ui.input(|input| {
-                        if rect.contains(input.pointer.interact_pos()?) {
-                            hovered_index = Some(i);
-                        }
-                        None::<()>
+                    let directly_hovering_this_portal = ui.input(|input| {
+                        input
+                            .pointer
+                            .interact_pos()
+                            .is_some_and(|it| rect.contains(it))
+                            || input
+                                .pointer
+                                .press_origin()
+                                .is_some_and(|it| rect.contains(it))
                     });
+                    if directly_hovering_this_portal {
+                        hovered_index = Some(i);
+                        self.new_hovered_portals.push(portal.id);
+                    }
+
+                    if self.hovered_portals.contains(&portal.id) {
+                        let [red, g, b] = portal.color;
+                        ui.painter().rect_stroke(
+                            r.response.rect,
+                            4.0,
+                            (OUTLINE_WIDTH, egui::Color32::from_rgb(red, g, b)),
+                            egui::StrokeKind::Outside,
+                        );
+
+                        if self.hovered_portals.len() == 1 && !directly_hovering_this_portal {
+                            r.response
+                                .scroll_to_me_animation(None, egui::style::ScrollAnimation::none());
+                        }
+                    }
                 }
             });
 
@@ -428,12 +500,7 @@ impl App {
             .coordinates_formatter(
                 egui_plot::Corner::LeftBottom,
                 egui_plot::CoordinatesFormatter::new(|hover_point, _bounds| {
-                    let (x, y, z) = match plane {
-                        Plane::XY => (hover_point.x, hover_point.y, new_camera.pos.z),
-                        Plane::XZ => (hover_point.x, new_camera.pos.y, -hover_point.y),
-                        Plane::ZY => (new_camera.pos.x, hover_point.y, hover_point.x),
-                    };
-                    let pos = WorldPos { x, y, z };
+                    let pos = plane.plot_to_world(*hover_point, *new_camera);
                     format!(
                         "Overworld: {overworld:10.03}\n   Nether: {nether:10.03}",
                         overworld = pos.convert_dimension(self.camera.dimension, Overworld),
@@ -451,11 +518,7 @@ impl App {
         let r = plot.show(ui, |plot_ui| {
             // Compute plot bounds from camera
             let mut bounds_from_camera = egui_plot::PlotBounds::NOTHING;
-            let [x, y] = match plane {
-                Plane::XY => [self.camera.pos.x, self.camera.pos.y],
-                Plane::XZ => [self.camera.pos.x, -self.camera.pos.z],
-                Plane::ZY => [self.camera.pos.z, self.camera.pos.y],
-            };
+            let egui_plot::PlotPoint { x, y } = plane.world_to_plot(self.camera.pos);
             let raw_size = plot_ui.transform().frame().size();
             let new_width = self.camera.height * raw_size.x as f64 / raw_size.y as f64;
             bounds_from_camera.set_x_center_width(x, new_width * width_scale);
@@ -464,12 +527,37 @@ impl App {
             plot_ui.set_plot_bounds(bounds_from_camera);
 
             self.show_portals_in_plot(plot_ui, plane);
+            self.show_portal_connections_in_plot(plot_ui, plane);
         });
+
+        if let Some(hovered_world_pos) = r
+            .response
+            .hover_pos()
+            .filter(|&pos| r.transform.frame().contains(pos))
+            .map(|pos| r.transform.value_from_position(pos))
+            .map(|point| plane.plot_to_world(point, *new_camera))
+            .map(|block_pos| block_pos.into())
+        {
+            let BlockPos { x, y, z } = hovered_world_pos;
+            for portal in &self.world.portals[new_camera.dimension] {
+                let x_range = portal.region.min.x..=portal.region.max.x;
+                let y_range = portal.region.min.y..=portal.region.max.y;
+                let z_range = portal.region.min.z..=portal.region.max.z;
+                let hovering_portal = match plane {
+                    Plane::XY => x_range.contains(&x) && y_range.contains(&y),
+                    Plane::XZ => x_range.contains(&x) && z_range.contains(&z),
+                    Plane::ZY => z_range.contains(&z) && y_range.contains(&y),
+                };
+                if hovering_portal {
+                    self.new_hovered_portals.push(portal.id);
+                }
+            }
+        }
 
         // Update camera on interaction with plot
         if r.response.hovered() || r.response.dragged() {
             let bounds = r.transform.bounds();
-            let PlotPoint { x, y } = bounds.center();
+            let egui_plot::PlotPoint { x, y } = bounds.center();
             match plane {
                 Plane::XY => (new_camera.pos.x, new_camera.pos.y) = (x, y),
                 Plane::XZ => (new_camera.pos.x, new_camera.pos.z) = (x, -y),
@@ -512,7 +600,10 @@ impl App {
 
         let region =
             WorldRegion::from(portal.region).convert_dimension(portal_dimension, plot_dimension);
-        let points = world_region_to_rect_plot_points(region, plane);
+
+        let a = plane.world_to_plot(region.min);
+        let b = plane.world_to_plot(region.max);
+        let points = vec![[a.x, a.y], [a.x, b.y], [b.x, b.y], [b.x, a.y]];
 
         let base_color = match portal_dimension {
             Overworld => egui::Color32::BLUE,
@@ -522,15 +613,24 @@ impl App {
         let stroke_color = base_color;
         let fill_color = base_color.gamma_multiply(0.2);
 
+        let [r, g, b] = portal.color;
+
         let polygon = egui_plot::Polygon::new("", points)
             .fill_color(fill_color)
-            .stroke((stroke_width, stroke_color));
+            .stroke((
+                stroke_width,
+                egui::Color32::from_rgb(r, g, b).gamma_multiply(opacity),
+            ));
 
         plot_ui.add(polygon);
         if !portal.name.is_empty() {
             let mut job = egui::text::LayoutJob::default();
             job.append(
-                &portal.name,
+                if self.show_all_labels || self.hovered_portals.contains(&portal.id) {
+                    &portal.name
+                } else {
+                    ""
+                },
                 0.0,
                 egui::TextFormat::simple(
                     egui::FontId::proportional(14.0),
@@ -541,10 +641,97 @@ impl App {
 
             plot_ui.add(egui_plot::Text::new(
                 "",
-                world_pos_to_plot_point(region.center(), plane),
+                plane.world_to_plot(region.center()),
                 job,
             ));
         }
+    }
+
+    fn show_portal_connections_in_plot(&self, plot_ui: &mut egui_plot::PlotUi<'_>, plane: Plane) {
+        if !self.show_all_arrows && self.hovered_portals.is_empty() {
+            return;
+        }
+
+        let id_to_portal: HashMap<PortalId, &Portal> =
+            itertools::chain(&self.world.portals.overworld, &self.world.portals.nether)
+                .map(|p| (p.id, p))
+                .collect();
+        let overworld_portal_set: HashSet<PortalId> =
+            self.world.portals.overworld.iter().map(|p| p.id).collect();
+        let get_dim_of_portal = |id| {
+            if overworld_portal_set.contains(id) {
+                Overworld
+            } else {
+                Nether
+            }
+        };
+        for (id2, (_outgoing, incoming)) in &self.cached_links {
+            let Some(portal2) = id_to_portal.get(id2) else {
+                continue;
+            };
+            let dim2 = get_dim_of_portal(id2);
+
+            for id1 in incoming {
+                if self.show_all_arrows
+                    || self.hovered_portals.contains(id1)
+                    || self.hovered_portals.contains(id2)
+                {
+                    let Some(portal1) = id_to_portal.get(id1) else {
+                        continue;
+                    };
+                    let dim1 = get_dim_of_portal(id1);
+
+                    self.show_portal_connection_in_plot(
+                        plot_ui, plane, portal1, dim1, portal2, dim2,
+                    );
+                }
+            }
+        }
+    }
+
+    fn show_portal_connection_in_plot(
+        &self,
+        plot_ui: &mut egui_plot::PlotUi<'_>,
+        plane: Plane,
+        src: &Portal,
+        src_dimension: Dimension,
+        dst: &Portal,
+        dst_dimension: Dimension,
+    ) {
+        let camera_dim = self.camera.dimension;
+        let src_pos = WorldRegion::from(src.region).center();
+        let dst_pos = WorldRegion::from(dst.region).center();
+        let mut src_point =
+            plane.world_to_plot(src_pos.convert_dimension(src_dimension, camera_dim));
+        let mut dst_point =
+            plane.world_to_plot(dst_pos.convert_dimension(dst_dimension, camera_dim));
+
+        // can't use `plot_ui.dpos_dvalue_x()` because it doesn't use the
+        // updated transform
+        let dpos_dvalue_x = plot_ui.transform().frame().width() / self.camera.width as f32;
+
+        // Shrink arrow by half a block
+        let vector =
+            (dst_point.to_pos2() - src_point.to_pos2()).normalized() * 8.0 / dpos_dvalue_x.sqrt();
+        src_point.x += vector.x as f64;
+        src_point.y += vector.y as f64;
+        dst_point.x -= vector.x as f64;
+        dst_point.y -= vector.y as f64;
+
+        let [r, g, b] = match self.arrow_coloring {
+            ArrowColoring::BySource => src.color,
+            ArrowColoring::ByDestination => dst.color,
+        };
+
+        plot_ui.add(
+            egui_plot::Arrows::new(
+                format!("{} to {}", src.display_name(), dst.display_name()),
+                egui_plot::PlotPoints::Owned(vec![src_point]),
+                egui_plot::PlotPoints::Owned(vec![dst_point]),
+            )
+            .color(egui::Color32::from_rgb(r, g, b))
+            .tip_length(dpos_dvalue_x.sqrt() / camera_dim.scale() as f32 * 6.0),
+        );
     }
 
     fn calculate_portal_link_result(
@@ -590,9 +777,7 @@ impl App {
                 for destination_id in ids {
                     match self.cached_links.get_mut(&destination_id) {
                         Some((_, incoming)) => incoming.push(id),
-                        None => {
-                            log::error!("missing destination portal with id {destination_id}")
-                        }
+                        None => log::error!("no destination portal with id {destination_id}"),
                     }
                 }
             }
@@ -615,6 +800,8 @@ impl eframe::App for App {
 
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
+            ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+
             let mut new_camera = self.camera;
 
             let r = ui.available_rect_before_wrap();
@@ -670,6 +857,13 @@ impl eframe::App for App {
                         self.undo();
                         self.save_to_file();
                     }
+
+                    if input.consume_shortcut(&egui::KeyboardShortcut::new(
+                        egui::Modifiers::NONE,
+                        egui::Key::Space,
+                    )) {
+                        self.set_camera_dimension(self.camera.dimension.other());
+                    }
                 }
             });
         });
@@ -682,21 +876,6 @@ impl eframe::App for App {
             log::debug!("Recalculated portal links in {:?}", t.elapsed());
         }
     }
-}
-
-fn world_region_to_rect_plot_points(region: WorldRegion, slice: Plane) -> Vec<[f64; 2]> {
-    let WorldRegion { min, max } = region;
-    let PlotPoint { x: x1, y: y1 } = world_pos_to_plot_point(min, slice);
-    let PlotPoint { x: x2, y: y2 } = world_pos_to_plot_point(max, slice);
-    vec![[x1, y1], [x1, y2], [x2, y2], [x2, y1]]
-}
-fn world_pos_to_plot_point(pos: WorldPos, slice: Plane) -> PlotPoint {
-    let [x, y] = match slice {
-        Plane::XY => [pos.x, pos.y],
-        Plane::XZ => [pos.x, -pos.z],
-        Plane::ZY => [pos.z, pos.y],
-    };
-    PlotPoint { x, y }
 }
 
 fn show_block_pos_edit(ui: &mut egui::Ui, BlockPos { x, y, z }: &mut BlockPos) {
@@ -832,4 +1011,11 @@ impl AnimationState {
     fn is_static(&self) -> bool {
         self.aspect_ratio_scale == 1.0
     }
+}
+
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
+enum ArrowColoring {
+    #[default]
+    BySource,
+    ByDestination,
 }

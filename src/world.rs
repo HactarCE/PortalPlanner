@@ -145,6 +145,7 @@ pub trait ConvertDimension: Sized {
 }
 
 impl WorldPortals {
+    #[cfg(test)]
     pub(crate) fn portal_destinations_naive(
         &self,
         destination_dimension: Dimension,

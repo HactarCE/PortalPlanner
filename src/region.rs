@@ -218,6 +218,13 @@ impl WorldRegion {
     pub fn is_valid(self) -> bool {
         self.min.x <= self.max.x && self.min.y <= self.max.y && self.min.z <= self.max.z
     }
+
+    /// Returns whether the region contains the position.
+    pub fn contains_pos(self, pos: WorldPos) -> bool {
+        (self.min.x..=self.max.x).contains(&pos.x)
+            && (self.min.y..=self.max.y).contains(&pos.y)
+            && (self.min.z..=self.max.z).contains(&pos.z)
+    }
 }
 
 #[cfg(test)]

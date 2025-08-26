@@ -11,6 +11,26 @@ pub enum Plane {
     XZ,
     ZY,
 }
+impl Plane {
+    /// Converts world coordinates to plot coordinates.
+    pub fn world_to_plot(self, pos: WorldPos) -> egui_plot::PlotPoint {
+        let [x, y] = match self {
+            Plane::XY => [pos.x, pos.y],
+            Plane::XZ => [pos.x, -pos.z],
+            Plane::ZY => [pos.z, pos.y],
+        };
+        egui_plot::PlotPoint { x, y }
+    }
+    /// Converts plot coordinates to world coordinates.
+    pub fn plot_to_world(self, point: egui_plot::PlotPoint, camera: Camera) -> WorldPos {
+        let [x, y, z] = match self {
+            Plane::XY => [point.x, point.y, camera.pos.z],
+            Plane::XZ => [point.x, camera.pos.y, -point.y],
+            Plane::ZY => [camera.pos.x, point.y, point.x],
+        };
+        WorldPos { x, y, z }
+    }
+}
 
 /// Plot camera location.
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
