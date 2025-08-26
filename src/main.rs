@@ -67,6 +67,9 @@ pub struct App {
     show_all_arrows: bool,
     arrow_coloring: ArrowColoring,
 
+    hide_zy_plot: bool,
+
+    hovering_plot: bool,
     hovered_portals: Vec<PortalId>,
     new_hovered_portals: Vec<PortalId>,
 
@@ -103,6 +106,9 @@ impl App {
             show_all_arrows: false,
             arrow_coloring: ArrowColoring::default(),
 
+            hide_zy_plot: false,
+
+            hovering_plot: false,
             hovered_portals: vec![],
             new_hovered_portals: vec![],
 
@@ -167,6 +173,8 @@ impl App {
             self.set_camera_dimension(new_camera_dimension);
 
             show_world_pos_edit(ui, &mut self.camera.pos, self.camera.dimension);
+
+            ui.checkbox(&mut self.hide_zy_plot, "Hide ZY plot");
         });
 
         ui.horizontal(|ui| {
@@ -402,7 +410,7 @@ impl App {
                         });
 
                     let rect = r.response.rect.intersect(ui.clip_rect());
-                    let directly_hovering_this_portal = ui.input(|input| {
+                    let hovering_this_portal = ui.input(|input| {
                         input
                             .pointer
                             .interact_pos()
@@ -412,7 +420,7 @@ impl App {
                                 .press_origin()
                                 .is_some_and(|it| rect.contains(it))
                     });
-                    if directly_hovering_this_portal {
+                    if hovering_this_portal {
                         hovered_index = Some(i);
                         self.new_hovered_portals.push(portal.id);
                     }
@@ -426,7 +434,7 @@ impl App {
                             egui::StrokeKind::Outside,
                         );
 
-                        if self.hovered_portals.len() == 1 && !directly_hovering_this_portal {
+                        if self.hovered_portals.len() == 1 && self.hovering_plot {
                             r.response
                                 .scroll_to_me_animation(None, egui::style::ScrollAnimation::none());
                         }
@@ -529,6 +537,8 @@ impl App {
             self.show_portals_in_plot(plot_ui, plane);
             self.show_portal_connections_in_plot(plot_ui, plane);
         });
+
+        self.hovering_plot |= r.response.hovered();
 
         if let Some(hovered_world_pos) = r
             .response
@@ -814,11 +824,15 @@ impl eframe::App for App {
             let left_top = Rect::from_two_pos(center + vec2(-x, -y), center).shrink(PLOT_MARGIN);
             let right_top = Rect::from_two_pos(center + vec2(x, -y), center).shrink(PLOT_MARGIN);
 
+            self.hovering_plot = false;
             for (plane, rect) in [
                 (Plane::XY, left_bottom),
                 (Plane::ZY, right_bottom),
                 (Plane::XZ, left_top),
             ] {
+                if self.hide_zy_plot && plane == Plane::ZY {
+                    continue;
+                }
                 ui.put(rect, |ui: &mut egui::Ui| {
                     self.show_view(ui, plane, &mut new_camera)
                 });
@@ -832,7 +846,12 @@ impl eframe::App for App {
                 .step((now - self.animation_state.last_frame).as_secs_f64());
             self.animation_state.last_frame = now;
 
-            ui.scope_builder(egui::UiBuilder::new().max_rect(right_top), |ui| {
+            let controls_rect = if self.hide_zy_plot {
+                right_top.union(right_bottom)
+            } else {
+                right_top
+            };
+            ui.scope_builder(egui::UiBuilder::new().max_rect(controls_rect), |ui| {
                 egui::ScrollArea::horizontal()
                     .auto_shrink([false; 2])
                     .show(ui, |ui| self.show_controls(ui))
