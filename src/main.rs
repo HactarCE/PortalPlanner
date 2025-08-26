@@ -197,9 +197,17 @@ impl App {
                 }
             });
             coordinate_label(ui, "Width");
-            ui.add(egui::DragValue::new(&mut self.entity.width).range(0.0..=256.0));
+            ui.add(
+                egui::DragValue::new(&mut self.entity.width)
+                    .range(0.0..=256.0)
+                    .speed(0.01),
+            );
             coordinate_label(ui, "Height");
-            ui.add(egui::DragValue::new(&mut self.entity.height).range(0.0..=256.0));
+            ui.add(
+                egui::DragValue::new(&mut self.entity.height)
+                    .range(0.0..=256.0)
+                    .speed(0.01),
+            );
             ui.checkbox(&mut self.entity.is_projectile, "Projectile");
         });
 
@@ -633,6 +641,25 @@ impl App {
             ));
 
         plot_ui.add(polygon);
+
+        if self.hovered_portals.contains(&portal.id) {
+            if let Some(region) = portal.entity_collision_region(self.entity) {
+                let region = WorldRegion::from(
+                    region
+                        .convert_dimension(portal_dimension, portal_dimension.other())
+                        .block_region_containing(),
+                )
+                .convert_dimension(portal_dimension.other(), plot_dimension);
+
+                let a = plane.world_to_plot(region.min);
+                let b = plane.world_to_plot(region.max);
+                let points = vec![[a.x, a.y], [a.x, b.y], [b.x, b.y], [b.x, a.y]];
+
+                plot_ui
+                    .add(egui_plot::Polygon::new("", points).stroke((1.0, egui::Color32::WHITE)));
+            }
+        }
+
         if !portal.name.is_empty() {
             let mut job = egui::text::LayoutJob::default();
             job.append(
