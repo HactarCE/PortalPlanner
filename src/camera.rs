@@ -63,7 +63,7 @@ impl Default for Camera {
 impl Camera {
     /// Resets the camera completely.
     pub fn reset(&mut self) {
-        *self = Self::default()
+        *self = Self::default();
     }
 
     /// Returns the position of the camera in the given dimension.

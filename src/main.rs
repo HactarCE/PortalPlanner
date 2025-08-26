@@ -322,7 +322,7 @@ impl App {
                 |ui| {
                     keep = !img_button(ui, egui::include_image!("resources/img/delete.svg"))
                         .on_hover_text("Delete test point")
-                        .clicked()
+                        .clicked();
                 },
             );
 
@@ -592,7 +592,6 @@ impl App {
             .filter(|&pos| r.transform.frame().contains(pos))
             .map(|pos| r.transform.value_from_position(pos))
             .map(|point| plane.plot_to_world(point, *new_camera))
-            .map(|block_pos| block_pos.into())
         {
             if self.hover_either_dimension {
                 self.process_portal_hovers(Overworld, plane, hovered_world_pos);
@@ -1088,7 +1087,7 @@ impl eframe::App for App {
             ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
             ui_unless_overflow(ui, |ui| self.show_menu_bar(ui, false, false))
                 .or_else(|| ui_unless_overflow(ui, |ui| self.show_menu_bar(ui, false, true)))
-                .unwrap_or_else(|| self.show_menu_bar(ui, true, true))
+                .unwrap_or_else(|| self.show_menu_bar(ui, true, true));
         });
 
         egui::TopBottomPanel::bottom("bottom_bar").show(ctx, |ui| {
@@ -1164,7 +1163,7 @@ impl eframe::App for App {
                 right_top.union(right_bottom)
             };
             ui.scope_builder(egui::UiBuilder::new().max_rect(controls_rect), |ui| {
-                self.show_all_portal_lists(ui)
+                self.show_all_portal_lists(ui);
             });
 
             let is_text_field_active = ui.ctx().wants_keyboard_input();
