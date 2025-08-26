@@ -5,7 +5,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use smallvec::{SmallVec, smallvec};
 
-use crate::{Axis, BlockRegion, Portal};
+use crate::{Axis, BlockPos, BlockRegion, Portal, WorldPos};
 
 /// Overworld or nether.
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
@@ -80,30 +80,36 @@ impl Dimension {
 }
 
 /// Minecraft world.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq)]
 pub struct World {
     /// Portals in each dimension.
     pub portals: WorldPortals,
+    /// Test points in each dimension.
+    #[serde(default)]
+    pub test_points: WorldTestPoints,
 }
 
-/// Portals in a Minecraft world.
-#[derive(Serialize, Deserialize, Default, Clone, PartialEq, Eq)]
-#[cfg_attr(not(test), derive(Debug))]
-pub struct WorldPortals {
-    /// Portals in the overworld.
-    pub overworld: Vec<Portal>,
-    /// Portals in the nether.
-    pub nether: Vec<Portal>,
+/// List of portals in a Minecraft world.
+pub type WorldPortals = ListPerDimension<Portal>;
+/// List of positions in a Minecraft world.
+pub type WorldTestPoints = ListPerDimension<WorldPos>;
+
+/// List of objects per dimension.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ListPerDimension<T> {
+    pub overworld: Vec<T>,
+    pub nether: Vec<T>,
 }
-#[cfg(test)]
-impl fmt::Debug for WorldPortals {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", serde_json::to_string_pretty(self).unwrap())
+impl<T> Default for ListPerDimension<T> {
+    fn default() -> Self {
+        Self {
+            overworld: vec![],
+            nether: vec![],
+        }
     }
 }
-
-impl Index<Dimension> for WorldPortals {
-    type Output = Vec<Portal>;
+impl<T> Index<Dimension> for ListPerDimension<T> {
+    type Output = Vec<T>;
 
     fn index(&self, index: Dimension) -> &Self::Output {
         match index {
@@ -112,8 +118,7 @@ impl Index<Dimension> for WorldPortals {
         }
     }
 }
-
-impl IndexMut<Dimension> for WorldPortals {
+impl<T> IndexMut<Dimension> for ListPerDimension<T> {
     fn index_mut(&mut self, index: Dimension) -> &mut Self::Output {
         match index {
             Dimension::Overworld => &mut self.overworld,
@@ -145,6 +150,29 @@ pub trait ConvertDimension: Sized {
 }
 
 impl WorldPortals {
+    /// Returns the portal an entity will teleport to. If multiple portals are
+    /// equidistant, they are all returned.
+    pub fn entity_destinations(
+        &self,
+        entity_dimension: Dimension,
+        entity_position: WorldPos,
+    ) -> Vec<&Portal> {
+        let destination_dimension = entity_dimension.other();
+        let target_block = BlockPos::from(
+            entity_position.convert_dimension(entity_dimension, destination_dimension),
+        );
+        let distances = self[destination_dimension]
+            .iter()
+            .filter(|p| p.is_in_range_of_point(target_block, destination_dimension))
+            .map(|p| p.region.min_euclidean_distance_sq_to_point(target_block))
+            .collect_vec();
+        let min_distance = distances.iter().min();
+        std::iter::zip(&self[destination_dimension], &distances)
+            .filter(|(_, distance)| Some(*distance) == min_distance)
+            .map(|(portal, _)| portal)
+            .collect()
+    }
+
     #[cfg(test)]
     pub(crate) fn portal_destinations_naive(
         &self,
@@ -417,6 +445,7 @@ mod tests {
                 overworld: vec![a, b],
                 nether: vec![big.clone()],
             },
+            ..Default::default()
         };
         let destination_region = big
             .destination_region(Entity::PLAYER, Dimension::Overworld)

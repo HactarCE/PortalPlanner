@@ -18,6 +18,7 @@ pub use Dimension::{Nether, Overworld};
 pub use camera::{Camera, Plane};
 pub use entity::Entity;
 pub use id::PortalId;
+use itertools::Itertools;
 pub use portal::{Portal, PortalAxis};
 pub use pos::{Axis, BlockPos, WorldPos};
 pub use region::{BlockRegion, WorldRegion};
@@ -249,17 +250,66 @@ impl App {
     fn show_portal_list(&mut self, ui: &mut egui::Ui, dimension: Dimension) {
         ui.heading(dimension.to_string());
 
-        if ui.button("Add portal").clicked() {
-            match dimension {
-                Overworld => self.add_portal_in_overworld(),
-                Nether => self.add_portal_in_nether(),
+        ui.columns(2, |uis| {
+            if uis[0].button("Add portal").clicked() {
+                match dimension {
+                    Overworld => self.add_portal_in_overworld(),
+                    Nether => self.add_portal_in_nether(),
+                }
             }
-        }
+            if uis[1].button("Add test point").clicked() {
+                self.world.test_points[dimension].push(self.camera.pos);
+            }
+        });
 
         let portals_by_id = self.last_saved_state.portals[dimension.other()]
             .iter()
             .map(|p| (p.id, p))
             .collect::<HashMap<PortalId, &Portal>>();
+
+        if !self.world.test_points[dimension].is_empty() {
+            ui.separator();
+        }
+
+        self.world.test_points[dimension].retain_mut(|test_point| {
+            let mut keep = true;
+
+            egui::Sides::new().shrink_left().show(
+                ui,
+                |ui| {
+                    if ui.button("◎").clicked() {
+                        self.camera.pos =
+                            test_point.convert_dimension(dimension, self.camera.dimension);
+                    }
+
+                    show_world_pos_edit(ui, test_point, dimension);
+
+                    let destination_portals = self
+                        .world
+                        .portals
+                        .entity_destinations(dimension, *test_point)
+                        .iter()
+                        .map(|p| p.id)
+                        .collect_vec();
+
+                    if destination_portals.is_empty() {
+                        ui.colored_label(ui.visuals().error_fg_color, "Generates new portal");
+                    } else {
+                        let mut label_atoms = egui::Atoms::new("Links to: ");
+                        push_portal_list_text(
+                            ui,
+                            &mut label_atoms,
+                            &destination_portals,
+                            &portals_by_id,
+                        );
+                        ui.add(egui::AtomLayout::new(label_atoms));
+                    }
+                },
+                |ui| keep = !ui.button("🗑").clicked(),
+            );
+
+            keep
+        });
 
         ui.separator();
 
@@ -544,6 +594,7 @@ impl App {
 
             self.show_portals_in_plot(plot_ui, plane);
             self.show_portal_connections_in_plot(plot_ui, plane);
+            self.show_test_points_in_plot(plot_ui, plane);
         });
 
         self.hovering_plot |= r.response.hovered();
@@ -726,6 +777,12 @@ impl App {
         }
     }
 
+    fn dpos_dvalue_x(&self, plot_ui: &mut egui_plot::PlotUi<'_>) -> f32 {
+        // can't use `plot_ui.dpos_dvalue_x()` because it doesn't use the
+        // updated transform
+        plot_ui.transform().frame().width() / self.camera.width as f32
+    }
+
     fn show_portal_connection_in_plot(
         &self,
         plot_ui: &mut egui_plot::PlotUi<'_>,
@@ -743,9 +800,7 @@ impl App {
         let mut dst_point =
             plane.world_to_plot(dst_pos.convert_dimension(dst_dimension, camera_dim));
 
-        // can't use `plot_ui.dpos_dvalue_x()` because it doesn't use the
-        // updated transform
-        let dpos_dvalue_x = plot_ui.transform().frame().width() / self.camera.width as f32;
+        let dpos_dvalue_x = self.dpos_dvalue_x(plot_ui);
 
         // Shrink arrow by half a block
         let vector =
@@ -769,6 +824,27 @@ impl App {
             .color(egui::Color32::from_rgb(r, g, b))
             .tip_length(dpos_dvalue_x.sqrt() / camera_dim.scale() as f32 * 6.0),
         );
+    }
+
+    fn show_test_points_in_plot(&self, plot_ui: &mut egui_plot::PlotUi<'_>, plane: Plane) {
+        let dpos_dvalue_x = self.dpos_dvalue_x(plot_ui);
+        for dim in [Overworld, Nether] {
+            for &test_point in &self.world.test_points[dim] {
+                let plot_point =
+                    plane.world_to_plot(test_point.convert_dimension(dim, self.camera.dimension));
+                let destination_portals = self.world.portals.entity_destinations(dim, test_point);
+                let [r, g, b] = match destination_portals.first() {
+                    Some(p) => p.color,
+                    None => [255, 0, 0], // red (error)
+                };
+                plot_ui.add(
+                    egui_plot::Points::new("", egui_plot::PlotPoints::Owned(vec![plot_point]))
+                        .shape(egui_plot::MarkerShape::Diamond)
+                        .radius(dpos_dvalue_x.sqrt() / self.camera.dimension.scale() as f32 * 3.0)
+                        .color(egui::Color32::from_rgb(r, g, b)),
+                );
+            }
+        }
     }
 
     fn calculate_portal_link_result(
@@ -939,13 +1015,17 @@ fn show_world_pos_edit(
 ) -> egui::Response {
     ui.horizontal(|ui| {
         coordinate_label(ui, "X");
-        ui.add(egui::DragValue::new(x));
+        ui.add(egui::DragValue::new(x).speed(0.1));
 
         coordinate_label(ui, "Y");
-        ui.add(egui::DragValue::new(y).range(dimension.y_range()));
+        ui.add(
+            egui::DragValue::new(y)
+                .speed(0.1)
+                .range(dimension.y_range()),
+        );
 
         coordinate_label(ui, "Z");
-        ui.add(egui::DragValue::new(z));
+        ui.add(egui::DragValue::new(z).speed(0.1));
     })
     .response
 }
