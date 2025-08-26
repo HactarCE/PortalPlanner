@@ -70,9 +70,7 @@ pub struct App {
 
     hide_zy_plot: bool,
 
-    hovering_plot: bool,
-    hovered_portals: Vec<PortalId>,
-    new_hovered_portals: Vec<PortalId>,
+    portals_hovered: PortalHoverState,
 
     lock_portal_size: bool,
     entity: Entity,
@@ -109,9 +107,7 @@ impl App {
 
             hide_zy_plot: false,
 
-            hovering_plot: false,
-            hovered_portals: vec![],
-            new_hovered_portals: vec![],
+            portals_hovered: PortalHoverState::default(),
 
             lock_portal_size: true,
             entity: Entity::PLAYER,
@@ -162,7 +158,7 @@ impl App {
     fn show_controls(&mut self, ui: &mut egui::Ui) {
         let mut changed = false;
 
-        self.hovered_portals = std::mem::take(&mut self.new_hovered_portals);
+        self.portals_hovered.in_list = None;
 
         ui.horizontal(|ui| {
             ui.strong("View");
@@ -313,8 +309,8 @@ impl App {
 
         ui.separator();
 
-        let mut reorder_drag_source = None;
-        let mut hovered_index = None;
+        let mut reorder_drag_start = None;
+        let mut reorder_drag_end = None;
         let mut remove = None;
         egui::ScrollArea::vertical()
             .id_salt(dimension)
@@ -444,7 +440,8 @@ impl App {
                                 );
                                 let color;
                                 if r.dragged() {
-                                    reorder_drag_source = Some(i);
+                                    reorder_drag_start = Some(i);
+                                    self.portals_hovered.in_list = Some(portal.id);
                                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                     color = ui.visuals().strong_text_color();
                                 } else if r.hovered() {
@@ -468,22 +465,19 @@ impl App {
                         });
 
                     let rect = r.response.rect.intersect(ui.clip_rect());
-                    let hovering_this_portal = ui.input(|input| {
-                        input
-                            .pointer
-                            .interact_pos()
-                            .is_some_and(|it| rect.contains(it))
-                            || input
-                                .pointer
-                                .press_origin()
-                                .is_some_and(|it| rect.contains(it))
-                    });
-                    if hovering_this_portal {
-                        hovered_index = Some(i);
-                        self.new_hovered_portals.push(portal.id);
+                    let rect_contains = |p: Option<_>| p.is_some_and(|it| rect.contains(it));
+                    let hovering_this =
+                        ui.input(|input| rect_contains(input.pointer.interact_pos()));
+                    let dragging = ui.input(|input| input.pointer.is_decidedly_dragging());
+                    if hovering_this {
+                        if dragging {
+                            reorder_drag_end = Some(i);
+                        } else {
+                            self.portals_hovered.in_list = Some(portal.id);
+                        }
                     }
 
-                    if self.hovered_portals.contains(&portal.id) {
+                    if self.portals_hovered.contains(portal.id) {
                         let [red, g, b] = portal.color;
                         ui.painter().rect_stroke(
                             r.response.rect,
@@ -491,16 +485,15 @@ impl App {
                             (OUTLINE_WIDTH, egui::Color32::from_rgb(red, g, b)),
                             egui::StrokeKind::Outside,
                         );
-
-                        if self.hovered_portals.len() == 1 && self.hovering_plot {
-                            r.response
-                                .scroll_to_me_animation(None, egui::style::ScrollAnimation::none());
-                        }
+                    }
+                    if self.portals_hovered.in_plot.iter().exactly_one().ok() == Some(&portal.id) {
+                        r.response
+                            .scroll_to_me_animation(None, egui::style::ScrollAnimation::none());
                     }
                 }
             });
 
-        if let (Some(i), Some(j)) = (reorder_drag_source, hovered_index) {
+        if let (Some(i), Some(j)) = (reorder_drag_start, reorder_drag_end) {
             if i < j {
                 self.world.portals[dimension][i..=j].rotate_left(1);
             } else if i > j {
@@ -597,8 +590,6 @@ impl App {
             self.show_test_points_in_plot(plot_ui, plane);
         });
 
-        self.hovering_plot |= r.response.hovered();
-
         if let Some(hovered_world_pos) = r
             .response
             .hover_pos()
@@ -618,7 +609,7 @@ impl App {
                     Plane::ZY => z_range.contains(&z) && y_range.contains(&y),
                 };
                 if hovering_portal {
-                    self.new_hovered_portals.push(portal.id);
+                    self.portals_hovered.in_plot_for_next_frame.push(portal.id);
                 }
             }
         }
@@ -693,7 +684,7 @@ impl App {
 
         plot_ui.add(polygon);
 
-        if self.hovered_portals.contains(&portal.id) {
+        if self.portals_hovered.contains(portal.id) {
             if let Some(region) = portal.entity_collision_region(self.entity) {
                 let region = WorldRegion::from(
                     region
@@ -714,7 +705,7 @@ impl App {
         if !portal.name.is_empty() {
             let mut job = egui::text::LayoutJob::default();
             job.append(
-                if self.show_all_labels || self.hovered_portals.contains(&portal.id) {
+                if self.show_all_labels || self.portals_hovered.contains(portal.id) {
                     &portal.name
                 } else {
                     ""
@@ -736,7 +727,7 @@ impl App {
     }
 
     fn show_portal_connections_in_plot(&self, plot_ui: &mut egui_plot::PlotUi<'_>, plane: Plane) {
-        if !self.show_all_arrows && self.hovered_portals.is_empty() {
+        if !self.show_all_arrows && self.portals_hovered.is_empty() {
             return;
         }
 
@@ -761,8 +752,8 @@ impl App {
 
             for id1 in incoming {
                 if self.show_all_arrows
-                    || self.hovered_portals.contains(id1)
-                    || self.hovered_portals.contains(id2)
+                    || self.portals_hovered.contains(*id1)
+                    || self.portals_hovered.contains(*id2)
                 {
                     let Some(portal1) = id_to_portal.get(id1) else {
                         continue;
@@ -927,7 +918,8 @@ impl eframe::App for App {
             let left_top = Rect::from_two_pos(center + vec2(-x, -y), center).shrink(PLOT_MARGIN);
             let right_top = Rect::from_two_pos(center + vec2(x, -y), center).shrink(PLOT_MARGIN);
 
-            self.hovering_plot = false;
+            self.portals_hovered.in_plot =
+                std::mem::take(&mut self.portals_hovered.in_plot_for_next_frame);
             for (plane, rect) in [
                 (Plane::XY, left_bottom),
                 (Plane::ZY, right_bottom),
@@ -1144,4 +1136,19 @@ enum ArrowColoring {
     #[default]
     BySource,
     ByDestination,
+}
+
+#[derive(Debug, Default, Clone)]
+struct PortalHoverState {
+    in_list: Option<PortalId>,
+    in_plot: Vec<PortalId>,
+    in_plot_for_next_frame: Vec<PortalId>,
+}
+impl PortalHoverState {
+    fn is_empty(&self) -> bool {
+        self.in_list.is_none() && self.in_plot.is_empty()
+    }
+    fn contains(&self, id: PortalId) -> bool {
+        self.in_list == Some(id) || self.in_plot.contains(&id)
+    }
 }
