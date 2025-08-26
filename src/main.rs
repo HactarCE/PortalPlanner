@@ -169,7 +169,7 @@ impl App {
             }
             self.set_camera_dimension(new_camera_dimension);
 
-            show_world_pos_edit(ui, &mut self.camera.pos, self.camera.dimension);
+            show_world_pos_edit(ui, &mut self.camera.pos);
 
             ui.checkbox(&mut self.hide_zy_plot, "Hide ZY plot");
         });
@@ -278,7 +278,7 @@ impl App {
                             test_point.convert_dimension(dimension, self.camera.dimension);
                     }
 
-                    show_world_pos_edit(ui, test_point, dimension);
+                    show_world_pos_edit(ui, test_point);
 
                     let destination_portals = self
                         .world
@@ -1000,11 +1000,7 @@ fn show_block_pos_edit(ui: &mut egui::Ui, BlockPos { x, y, z }: &mut BlockPos) {
     });
 }
 
-fn show_world_pos_edit(
-    ui: &mut egui::Ui,
-    WorldPos { x, y, z }: &mut WorldPos,
-    dimension: Dimension,
-) -> egui::Response {
+fn show_world_pos_edit(ui: &mut egui::Ui, WorldPos { x, y, z }: &mut WorldPos) -> egui::Response {
     ui.horizontal(|ui| {
         coordinate_label(ui, "X");
         ui.add(egui::DragValue::new(x).speed(0.1));
@@ -1013,7 +1009,7 @@ fn show_world_pos_edit(
         ui.add(
             egui::DragValue::new(y)
                 .speed(0.1)
-                .range(dimension.y_range()),
+                .range(Overworld.y_min()..=Overworld.y_max() + 1),
         );
 
         coordinate_label(ui, "Z");
