@@ -188,7 +188,7 @@ impl App {
                         .id_salt("portal_list")
                         .show(ui, |ui| {
                             self.show_portal_list(ui, Overworld, false);
-                            ui.separator();
+                            ui.add(egui::Separator::default().grow(6.0));
                             self.show_portal_list(ui, Nether, false);
                         });
                 });
@@ -235,32 +235,42 @@ impl App {
     }
 
     fn show_portal_list(&mut self, ui: &mut egui::Ui, dimension: Dimension, scrollable: bool) {
-        if self.show_both_portal_lists {
-            ui.heading(dimension.to_string());
-        } else {
-            ui.horizontal(|ui| {
-                let mut new_camera_dimension = self.camera.dimension;
-                for dim in [Overworld, Nether] {
+        ui.horizontal(|ui| {
+            ui.set_min_height(26.0);
+
+            ui.scope(|ui| {
+                if big_img_button(ui, egui::include_image!("resources/img/portal-plus.svg"))
+                    .on_hover_text("Add portal")
+                    .clicked()
+                {
+                    match dimension {
+                        Overworld => self.add_portal_in_overworld(),
+                        Nether => self.add_portal_in_nether(),
+                    }
+                }
+
+                if big_img_button(
+                    ui,
+                    egui::include_image!("resources/img/map-marker-plus.svg"),
+                )
+                .on_hover_text("Add test point")
+                .clicked()
+                {
+                    self.world.test_points[dimension].push(self.camera.pos);
+                }
+            });
+
+            let mut new_camera_dimension = self.camera.dimension;
+            for dim in [Overworld, Nether] {
+                if !self.show_both_portal_lists || dim == dimension {
                     ui.selectable_value(
                         &mut new_camera_dimension,
                         dim,
                         egui::RichText::new(dim.to_string()).heading(),
                     );
                 }
-                self.set_camera_dimension(new_camera_dimension);
-            });
-        }
-
-        ui.columns(2, |uis| {
-            if uis[0].button("Add portal").clicked() {
-                match dimension {
-                    Overworld => self.add_portal_in_overworld(),
-                    Nether => self.add_portal_in_nether(),
-                }
             }
-            if uis[1].button("Add test point").clicked() {
-                self.world.test_points[dimension].push(self.camera.pos);
-            }
+            self.set_camera_dimension(new_camera_dimension);
         });
 
         let portals_by_id = self.last_saved_state.portals[dimension.other()]
@@ -278,7 +288,10 @@ impl App {
             egui::Sides::new().shrink_left().show(
                 ui,
                 |ui| {
-                    if ui.button("◎").clicked() {
+                    if img_button(ui, egui::include_image!("resources/img/crosshairs.svg"))
+                        .on_hover_text("Show in plot")
+                        .clicked()
+                    {
                         self.camera.pos =
                             test_point.convert_dimension(dimension, self.camera.dimension);
                     }
@@ -306,7 +319,11 @@ impl App {
                         ui.add(egui::AtomLayout::new(label_atoms));
                     }
                 },
-                |ui| keep = !ui.button("🗑").clicked(),
+                |ui| {
+                    keep = !img_button(ui, egui::include_image!("resources/img/delete.svg"))
+                        .on_hover_text("Delete test point")
+                        .clicked()
+                },
             );
 
             keep
@@ -352,7 +369,13 @@ impl App {
                                             });
                                         },
                                         |ui| {
-                                            if ui.button("🗑").clicked() {
+                                            if img_button(
+                                                ui,
+                                                egui::include_image!("resources/img/delete.svg"),
+                                            )
+                                            .on_hover_text("Delete test point")
+                                            .clicked()
+                                            {
                                                 remove = Some(i);
                                             }
                                         },
@@ -1018,7 +1041,16 @@ impl App {
                     ui.separator();
                 }
 
-                show_world_pos_edit(ui, &mut self.camera.pos, Some(0));
+                ui.horizontal(|ui| {
+                    if img_button(ui, egui::include_image!("resources/img/home.svg"))
+                        .on_hover_text("Reset camera")
+                        .clicked()
+                    {
+                        self.camera.reset();
+                    }
+
+                    show_world_pos_edit(ui, &mut self.camera.pos, Some(0));
+                });
             };
 
             if collapse_camera_controls {
@@ -1050,6 +1082,8 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
+        egui_extras::install_image_loaders(ctx); // ok to call every frame
+
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
             ui_unless_overflow(ui, |ui| self.show_menu_bar(ui, false, false))
@@ -1059,6 +1093,8 @@ impl eframe::App for App {
 
         egui::TopBottomPanel::bottom("bottom_bar").show(ctx, |ui| {
             ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+            ui.spacing_mut().scroll.bar_width /= 1.5;
+            ui.spacing_mut().scroll.bar_inner_margin = 0.0;
             let sp = std::mem::take(&mut ui.spacing_mut().item_spacing);
             ui.horizontal(|ui| {
                 egui::ScrollArea::horizontal()
@@ -1074,6 +1110,10 @@ impl eframe::App for App {
                         ui.separator();
                         ui.add_space(sp.x);
                         show_source_code_link(ui);
+                        ui.add_space(sp.x);
+                        ui.separator();
+                        ui.add_space(sp.x);
+                        ui.small("MDI icons by Google and Simran B.");
                     });
             });
         });
@@ -1385,4 +1425,25 @@ fn ui_unless_overflow<R>(ui: &mut egui::Ui, mut f: impl FnMut(&mut egui::Ui) -> 
         f(ui);
     })
     .then(|| f(ui))
+}
+
+fn big_img_button(ui: &mut egui::Ui, source: egui::ImageSource<'_>) -> egui::Response {
+    ui.scope(|ui| {
+        ui.spacing_mut().button_padding.y = ui.spacing().button_padding.x;
+        ui.add(
+            egui::Button::new(egui::Image::new(source).tint(ui.visuals().strong_text_color()))
+                .frame_when_inactive(false),
+        )
+    })
+    .inner
+}
+fn img_button(ui: &mut egui::Ui, source: egui::ImageSource<'_>) -> egui::Response {
+    ui.scope(|ui| {
+        ui.spacing_mut().button_padding.x = ui.spacing().button_padding.y;
+        ui.add(
+            egui::Button::new(egui::Image::new(source).tint(ui.visuals().strong_text_color()))
+                .frame_when_inactive(false),
+        )
+    })
+    .inner
 }
