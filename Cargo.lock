@@ -2667,7 +2667,9 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
- "wasm_thread",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
 ]
 
 [[package]]
@@ -2913,8 +2915,7 @@ dependencies = [
 [[package]]
 name = "rfd"
 version = "0.15.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef2bee61e6cffa4635c72d7d81a84294e28f0930db0ddcb0f66d10244674ebed"
+source = "git+https://github.com/PolyMeilex/rfd?rev=9fff5135c9bc2c156405b2f34e66ba919bd4b9d7#9fff5135c9bc2c156405b2f34e66ba919bd4b9d7"
 dependencies = [
  "ashpd",
  "block2 0.6.1",
@@ -3655,18 +3656,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a05d73b933a847d6cccdda8f838a22ff101ad9bf93e33684f39c1f5f0eece3d"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "wasm_thread"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7516db7f32decdadb1c3b8deb1b7d78b9df7606c5cc2f6241737c2ab3a0258e"
-dependencies = [
- "futures",
- "js-sys",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]

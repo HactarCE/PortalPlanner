@@ -16,6 +16,7 @@ mod id;
 mod portal;
 mod pos;
 mod region;
+mod threads;
 mod util;
 mod world;
 
@@ -27,6 +28,7 @@ use itertools::Itertools;
 pub use portal::{Portal, PortalAxis};
 pub use pos::{Axis, BlockPos, WorldPos};
 pub use region::{BlockRegion, WorldRegion};
+use threads::AsyncSafe;
 pub use world::{ConvertDimension, Dimension, World, WorldPortals};
 
 /// Application title.
@@ -65,15 +67,63 @@ mod kbd_shortcuts {
     pub const QUIT: Shortcut = Shortcut::new(Mods::COMMAND, Key::Q);
 }
 
+// Native
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
-    env_logger::builder()
-        .filter_module("portal_planner", log::LevelFilter::Debug)
-        .init();
+    env_logger::init();
+
     eframe::run_native(
         "Portal Tool",
         eframe::NativeOptions::default(),
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
     )
+}
+
+// Web
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    use eframe::wasm_bindgen::JsCast as _;
+
+    // Redirect `log` message to `console.log` and friends:
+    eframe::WebLogger::init(log::LevelFilter::Debug).ok();
+
+    let web_options = eframe::WebOptions::default();
+
+    wasm_bindgen_futures::spawn_local(async {
+        let document = web_sys::window()
+            .expect("No window")
+            .document()
+            .expect("No document");
+
+        let canvas = document
+            .get_element_by_id("the_canvas_id")
+            .expect("Failed to find the_canvas_id")
+            .dyn_into::<web_sys::HtmlCanvasElement>()
+            .expect("the_canvas_id was not a HtmlCanvasElement");
+
+        let start_result = eframe::WebRunner::new()
+            .start(
+                canvas,
+                web_options,
+                Box::new(|cc| Ok(Box::new(App::new(cc)))),
+            )
+            .await;
+
+        // Remove the loading text and spinner:
+        if let Some(loading_text) = document.get_element_by_id("loading_text") {
+            match start_result {
+                Ok(_) => {
+                    loading_text.remove();
+                }
+                Err(e) => {
+                    loading_text.set_inner_html(
+                        "<p> The app has crashed. See the developer console for details. </p>",
+                    );
+                    panic!("Failed to start eframe: {e:?}");
+                }
+            }
+        }
+    });
 }
 
 /// User preferences, autosaved on web and desktop.
@@ -93,7 +143,6 @@ pub struct Preferences {
 
     #[cfg(not(target_arch = "wasm32"))]
     autosave: bool,
-    #[cfg(not(target_arch = "wasm32"))]
     file_path: Option<PathBuf>,
 }
 impl Default for Preferences {
@@ -110,6 +159,7 @@ impl Default for Preferences {
             lock_portal_size: true,
             entity: Entity::PLAYER,
 
+            #[cfg(not(target_arch = "wasm32"))]
             autosave: true,
             file_path: None,
         }
@@ -215,7 +265,10 @@ impl App {
                     let world = serde_json::from_slice(&contents)
                         .map_err(|e| ("Error deserializing file", e))?;
                     Ok(AppAsyncTaskOk::Load {
-                        path: (!IS_WEB).then(|| file_handle.path().to_path_buf()),
+                        #[cfg(not(target_arch = "wasm32"))]
+                        path: Some(file_handle.path().to_path_buf()),
+                        #[cfg(target_arch = "wasm32")]
+                        path: None,
                         world,
                     })
                 }
@@ -243,18 +296,21 @@ impl App {
                 });
             }
 
-            match rfd::AsyncFileDialog::new()
+            let out = rfd::AsyncFileDialog::new()
                 .add_filter("JSON", &["json"])
                 .save_file()
-                .await
-            {
+                .await;
+            match out {
                 Some(file_handle) => {
                     file_handle
                         .write(contents_to_write.as_bytes())
                         .await
                         .map_err(|e| ("Error saving file", e))?;
                     Ok(AppAsyncTaskOk::MarkSaved {
-                        path: (!IS_WEB).then(|| file_handle.path().to_path_buf()),
+                        #[cfg(not(target_arch = "wasm32"))]
+                        path: Some(file_handle.path().to_path_buf()),
+                        #[cfg(target_arch = "wasm32")]
+                        path: None,
                     })
                 }
                 None => Ok(AppAsyncTaskOk::None),
@@ -263,7 +319,7 @@ impl App {
     }
 
     fn spawn_async_task<
-        F: 'static + Send + Future<Output = Result<AppAsyncTaskOk, AppAsyncTaskErr>>,
+        F: 'static + AsyncSafe + Future<Output = Result<AppAsyncTaskOk, AppAsyncTaskErr>>,
     >(
         &mut self,
         f: impl FnOnce() -> F,
@@ -274,7 +330,7 @@ impl App {
         let (tx, rx) = oneshot::channel();
         let task = f();
         self.async_task = Some(rx);
-        wasm_thread::spawn(move || tx.send(futures::executor::block_on(task)));
+        threads::spawn(async { tx.send(task.await).expect("channel disconnected") });
     }
 
     fn undo(&mut self) {
@@ -1091,8 +1147,11 @@ impl App {
                         self.save_as();
                         ui.close();
                     }
-                    ui.separator();
-                    ui.checkbox(&mut self.prefs.autosave, "Auto Save");
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        ui.separator();
+                        ui.checkbox(&mut self.prefs.autosave, "Auto Save");
+                    }
                     ui.separator();
                     if button_with_kbd(ui, "Import/Export…", &kbd_shortcuts::IMPORT_EXPORT)
                         .clicked()
@@ -1435,7 +1494,7 @@ impl eframe::App for App {
                 });
             }
             self.camera = new_camera;
-            let now = std::time::Instant::now();
+            let now = web_time::Instant::now();
             if !self.animation_state.is_static() {
                 ctx.request_repaint();
             }
@@ -1462,6 +1521,7 @@ impl eframe::App for App {
                         self.redo_history.clear();
                         self.undo_history.push(old_state);
                     }
+                    #[cfg(not(target_arch = "wasm32"))]
                     if self.prefs.autosave && self.unsaved_changes {
                         self.save();
                     }
@@ -1512,7 +1572,7 @@ impl eframe::App for App {
 
         let (cached_world, cached_entity) = &self.cached_state;
         if (cached_world, cached_entity) != (&self.world, &self.prefs.entity) {
-            let t = std::time::Instant::now();
+            let t = web_time::Instant::now();
             self.cached_state = (self.world.clone(), self.prefs.entity);
             self.recalculate_portal_links();
             log::debug!("Recalculated portal links in {:?}", t.elapsed());
@@ -1639,13 +1699,13 @@ fn push_portal_list_text(
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 struct AnimationState {
-    last_frame: std::time::Instant,
+    last_frame: web_time::Instant,
     aspect_ratio_scale: f64,
 }
 impl Default for AnimationState {
     fn default() -> Self {
         Self {
-            last_frame: std::time::Instant::now(),
+            last_frame: web_time::Instant::now(),
             aspect_ratio_scale: 1.0,
         }
     }
