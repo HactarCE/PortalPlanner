@@ -1,9 +1,16 @@
 //! Tool for planning Minecraft nether portal linkages.
 
-use std::collections::{HashMap, HashSet};
+use core::f32;
+use std::future::Future;
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use egui::Widget;
 use egui::emath::GuiRounding;
+use oneshot::TryRecvError;
+use serde::{Deserialize, Serialize};
 
 mod camera;
 mod entity;
@@ -32,8 +39,6 @@ const IS_WEB: bool = cfg!(target_arch = "wasm32");
 /// Scroll sensitivity override for egui, particularly when zooming in/out of
 /// the plot.
 pub const SCROLL_SENSITIVITY: f32 = 0.25;
-/// Path for loading & saving the portal configuration.
-pub const SAVE_FILE_PATH: &str = "world.json";
 /// Margin between plots.
 pub const PLOT_MARGIN: f32 = 8.0;
 
@@ -55,6 +60,13 @@ mod kbd_shortcuts {
 
     pub const SWITCH_DIMENSIONS: Shortcut = Shortcut::new(Mods::NONE, Key::Space);
     pub const RESET_CAMERA: Shortcut = Shortcut::new(Mods::NONE, Key::Escape);
+
+    pub const NEW: Shortcut = Shortcut::new(Mods::COMMAND, Key::N);
+    pub const IMPORT_EXPORT: Shortcut = Shortcut::new(Mods::COMMAND, Key::E);
+    pub const OPEN: Shortcut = Shortcut::new(Mods::COMMAND, Key::O);
+    pub const SAVE: Shortcut = Shortcut::new(Mods::COMMAND, Key::S);
+    pub const SAVE_AS: Shortcut = Shortcut::new(Mods::COMMAND.plus(Mods::SHIFT), Key::S);
+    pub const QUIT: Shortcut = Shortcut::new(Mods::COMMAND, Key::Q);
 }
 
 fn main() -> eframe::Result {
@@ -68,12 +80,10 @@ fn main() -> eframe::Result {
     )
 }
 
-/// Application state.
-pub struct App {
-    world: World,
-    camera: Camera,
-    animation_state: AnimationState,
-
+/// User preferences, autosaved on web and desktop.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(default)]
+pub struct Preferences {
     show_all_labels: bool,
     show_all_arrows: bool,
     arrow_coloring: ArrowColoring,
@@ -81,18 +91,64 @@ pub struct App {
     show_zy_plot: bool,
     show_both_portal_lists: bool,
 
-    portals_hovered: PortalHoverState,
-
     hover_either_dimension: bool,
     lock_portal_size: bool,
     entity: Entity,
 
-    last_saved_state: World,
+    #[cfg(not(target_arch = "wasm32"))]
+    autosave: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    file_path: Option<PathBuf>,
+}
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            show_all_labels: true,
+            show_all_arrows: false,
+            arrow_coloring: ArrowColoring::default(),
+
+            show_zy_plot: true,
+            show_both_portal_lists: false,
+
+            hover_either_dimension: true,
+            lock_portal_size: true,
+            entity: Entity::PLAYER,
+
+            autosave: true,
+            file_path: None,
+        }
+    }
+}
+impl Preferences {
+    const STORAGE_KEY: &str = "prefs";
+}
+
+/// Application state.
+#[derive(Default)]
+pub struct App {
+    world: World,
+    camera: Camera,
+    animation_state: AnimationState,
+
+    portals_hovered: PortalHoverState,
+
+    unsaved_changes: bool,
+    last_frame_state: World,
     undo_history: Vec<World>,
     redo_history: Vec<World>,
 
     cached_state: (World, Entity),
     cached_links: HashMap<PortalId, (PortalLinkResult, Vec<PortalId>)>,
+
+    prefs: Preferences,
+
+    import_export_modal_text: Option<String>,
+    cached_import_export_modal_text_deserialized: Option<serde_json::Result<World>>,
+
+    /// Task to complete before re-enabling the UI.
+    ///
+    /// If this is `Some`, then the UI is disabled.
+    async_task: Option<oneshot::Receiver<Result<AppAsyncTaskOk, AppAsyncTaskErr>>>,
 }
 
 impl App {
@@ -103,60 +159,139 @@ impl App {
             style.interaction.selectable_labels = false;
         });
 
-        let world: World = std::fs::read(SAVE_FILE_PATH)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
+        let storage = cc.storage.as_ref();
 
-        let last_saved_state = world.clone();
+        App {
+            prefs: storage
+                .and_then(|storage| storage.get_string(Preferences::STORAGE_KEY))
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default(),
 
-        Self {
-            world,
-            camera: Camera::default(),
-            animation_state: AnimationState::default(),
-
-            show_all_labels: true,
-            show_all_arrows: false,
-            arrow_coloring: ArrowColoring::default(),
-
-            show_zy_plot: true,
-            show_both_portal_lists: false,
-
-            portals_hovered: PortalHoverState::default(),
-
-            hover_either_dimension: true,
-            lock_portal_size: true,
-            entity: Entity::PLAYER,
-
-            last_saved_state,
-            undo_history: vec![],
-            redo_history: vec![],
-
-            cached_state: (World::default(), Entity::default()),
-            cached_links: HashMap::new(), // will be recomputed on first frame
+            ..Default::default()
         }
     }
 
-    fn save_to_file(&self) {
-        if let Ok(bytes) = serde_json::to_vec_pretty(&self.world) {
-            match std::fs::write(SAVE_FILE_PATH, &bytes) {
-                Ok(()) => (),
-                Err(e) => eprintln!("error saving {SAVE_FILE_PATH:?}: {e}"),
-            }
+    /// Returns `true` if the current file is saved or if the user confirms
+    /// discard.
+    fn is_ok_to_discard_state(&self) -> bool {
+        !self.unsaved_changes
+            || rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Warning)
+                .set_title("Discard unsaved changes?")
+                .set_buttons(rfd::MessageButtons::OkCancel)
+                .show()
+                == rfd::MessageDialogResult::Ok
+    }
+
+    fn reset(&mut self) {
+        if self.is_ok_to_discard_state() {
+            self.load(World::default());
         }
+    }
+    fn load(&mut self, world: World) {
+        self.world = world.clone();
+        self.last_frame_state = world;
+        self.undo_history = vec![];
+        self.redo_history = vec![];
+        self.unsaved_changes = false;
+        self.prefs.file_path = None;
+    }
+
+    fn toggle_import_export(&mut self) {
+        match serde_json::to_string_pretty(&self.world) {
+            Ok(s) => self.import_export_modal_text = Some(s),
+            Err(e) => show_error_dialog(("Export error", e)),
+        }
+    }
+
+    fn open(&mut self) {
+        if !self.is_ok_to_discard_state() {
+            return;
+        }
+        self.spawn_async_task(async move || {
+            match rfd::AsyncFileDialog::new()
+                .add_filter("JSON", &["json"])
+                .pick_file()
+                .await
+            {
+                Some(file_handle) => {
+                    let contents = file_handle.read().await;
+                    let world = serde_json::from_slice(&contents)
+                        .map_err(|e| ("Error deserializing file", e))?;
+                    Ok(AppAsyncTaskOk::Load {
+                        path: (!IS_WEB).then(|| file_handle.path().to_path_buf()),
+                        world,
+                    })
+                }
+                None => Ok(AppAsyncTaskOk::None),
+            }
+        });
+    }
+    fn save(&mut self) {
+        self.save_internal(self.prefs.file_path.clone());
+    }
+    fn save_as(&mut self) {
+        self.save_internal(None);
+    }
+    fn save_internal(&mut self, path: Option<PathBuf>) {
+        let serialization_result = serde_json::to_string_pretty(&self.world);
+        self.spawn_async_task(async move || {
+            let contents_to_write =
+                serialization_result.map_err(|e| ("Error serializing file", e))?;
+
+            if let Some(path) = path {
+                std::fs::write(&path, &contents_to_write)
+                    .map_err(|e| ("Error saving to file", e))?;
+                return Ok(AppAsyncTaskOk::MarkSaved {
+                    path: (!IS_WEB).then_some(path),
+                });
+            }
+
+            match rfd::AsyncFileDialog::new()
+                .add_filter("JSON", &["json"])
+                .save_file()
+                .await
+            {
+                Some(file_handle) => {
+                    file_handle
+                        .write(contents_to_write.as_bytes())
+                        .await
+                        .map_err(|e| ("Error saving file", e))?;
+                    Ok(AppAsyncTaskOk::MarkSaved {
+                        path: (!IS_WEB).then(|| file_handle.path().to_path_buf()),
+                    })
+                }
+                None => Ok(AppAsyncTaskOk::None),
+            }
+        });
+    }
+
+    fn spawn_async_task<
+        F: 'static + Send + Future<Output = Result<AppAsyncTaskOk, AppAsyncTaskErr>>,
+    >(
+        &mut self,
+        f: impl FnOnce() -> F,
+    ) {
+        if self.async_task.is_some() {
+            log::error!("cannot spawn async task; one is already running");
+        }
+        let (tx, rx) = oneshot::channel();
+        let task = f();
+        self.async_task = Some(rx);
+        wasm_thread::spawn(move || tx.send(futures::executor::block_on(task)));
     }
 
     fn undo(&mut self) {
         if let Some(new_state) = self.undo_history.pop() {
             let old_state = std::mem::replace(&mut self.world, new_state);
-            self.last_saved_state = self.world.clone();
+            self.last_frame_state = self.world.clone();
             self.redo_history.push(old_state);
         }
     }
     fn redo(&mut self) {
         if let Some(new_state) = self.redo_history.pop() {
             let old_state = std::mem::replace(&mut self.world, new_state);
-            self.last_saved_state = self.world.clone();
+            self.last_frame_state = self.world.clone();
             self.undo_history.push(old_state);
         }
     }
@@ -176,7 +311,7 @@ impl App {
 
     fn show_all_portal_lists(&mut self, ui: &mut egui::Ui) {
         self.portals_hovered.in_list = None;
-        if self.show_both_portal_lists {
+        if self.prefs.show_both_portal_lists {
             if ui.available_width() >= 800.0 {
                 ui.columns(2, |uis| {
                     uis[0].group(|ui| self.show_portal_list(ui, Overworld, true));
@@ -202,17 +337,17 @@ impl App {
         ui.horizontal(|ui| {
             coordinate_label(ui, "Width");
             ui.add(
-                egui::DragValue::new(&mut self.entity.width)
+                egui::DragValue::new(&mut self.prefs.entity.width)
                     .range(0.0..=16.0)
                     .speed(0.01),
             );
             coordinate_label(ui, "Height");
             ui.add(
-                egui::DragValue::new(&mut self.entity.height)
+                egui::DragValue::new(&mut self.prefs.entity.height)
                     .range(0.0..=16.0)
                     .speed(0.01),
             );
-            ui.checkbox(&mut self.entity.is_projectile, "Projectile")
+            ui.checkbox(&mut self.prefs.entity.is_projectile, "Projectile")
                 .on_hover_text(include_str!("resources/text/projectile.txt").trim());
         });
 
@@ -229,7 +364,7 @@ impl App {
                 let mut atoms = egui::Atoms::new(name);
                 atoms.push_right(egui::Atom::grow());
                 atoms.push_right(egui::RichText::new(format!("{entity:.02}")).small());
-                ui.selectable_value(&mut self.entity, entity, name);
+                ui.selectable_value(&mut self.prefs.entity, entity, name);
             }
         });
     }
@@ -262,7 +397,7 @@ impl App {
 
             let mut new_camera_dimension = self.camera.dimension;
             for dim in [Overworld, Nether] {
-                if !self.show_both_portal_lists || dim == dimension {
+                if !self.prefs.show_both_portal_lists || dim == dimension {
                     ui.selectable_value(
                         &mut new_camera_dimension,
                         dim,
@@ -273,10 +408,10 @@ impl App {
             self.set_camera_dimension(new_camera_dimension);
         });
 
-        let portals_by_id = self.last_saved_state.portals[dimension.other()]
+        let portals_by_id = self.world.portals[dimension.other()]
             .iter()
-            .map(|p| (p.id, p))
-            .collect::<HashMap<PortalId, &Portal>>();
+            .map(|p| (p.id, p.clone()))
+            .collect::<HashMap<PortalId, Portal>>();
 
         if !self.world.test_points[dimension].is_empty() {
             ui.separator();
@@ -329,28 +464,28 @@ impl App {
             keep
         });
 
-        ui.separator();
-
         let mut reorder_drag_start = None;
         let mut reorder_drag_end = None;
         let mut remove = None;
+        let mut show_in_plot = None;
         let mut show_portal_list_contents = |ui: &mut egui::Ui| {
             for (i, portal) in self.world.portals[dimension].iter_mut().enumerate() {
-                if i > 0 {
-                    ui.separator();
-                }
+                ui.separator();
 
                 const OUTLINE_WIDTH: f32 = 2.0;
 
-                let r = egui::Frame::new()
-                    .outer_margin(OUTLINE_WIDTH)
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let mut reorder_drag_rect =
-                                egui::Rect::from_min_size(ui.cursor().min, egui::vec2(12.0, 18.0));
-                            ui.advance_cursor_after_rect(reorder_drag_rect);
+                let r =
+                    egui::Frame::new()
+                        .outer_margin(OUTLINE_WIDTH)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let mut reorder_drag_rect = egui::Rect::from_min_size(
+                                    ui.cursor().min,
+                                    egui::vec2(12.0, 18.0),
+                                );
+                                ui.advance_cursor_after_rect(reorder_drag_rect);
 
-                            ui.vertical(|ui| {
+                                ui.vertical(|ui| {
                                 egui::collapsing_header::CollapsingState::load_with_default_open(
                                     ui.ctx(),
                                     egui::Id::new(portal.id).with("header"),
@@ -360,6 +495,13 @@ impl App {
                                     egui::Sides::new().shrink_left().show(
                                         ui,
                                         |ui| {
+                    if img_button(ui, egui::include_image!("resources/img/crosshairs.svg"))
+                        .on_hover_text("Show in plot")
+                        .clicked()
+                    {
+                        show_in_plot=Some(i);
+                    }
+
                                             ui.color_edit_button_srgb(&mut portal.color);
 
                                             ui.horizontal(|ui| {
@@ -393,13 +535,13 @@ impl App {
 
                                         portal.adjust_min(
                                             |min| show_block_pos_edit(ui, min),
-                                            self.lock_portal_size,
+                                            self.prefs.lock_portal_size,
                                             dimension,
                                         );
 
                                         portal.adjust_max(
                                             |max| show_block_pos_edit(ui, max),
-                                            self.lock_portal_size,
+                                            self.prefs.lock_portal_size,
                                             dimension,
                                         );
 
@@ -420,37 +562,37 @@ impl App {
                                 );
                             });
 
-                            reorder_drag_rect.max.y = ui.min_rect().max.y;
-                            let r = ui.interact(
-                                reorder_drag_rect,
-                                egui::Id::new(portal.id).with("reorder"),
-                                egui::Sense::drag(),
-                            );
-                            let color;
-                            if r.dragged() {
-                                reorder_drag_start = Some(i);
-                                self.portals_hovered.in_list = Some(portal.id);
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                                color = ui.visuals().strong_text_color();
-                            } else if r.hovered() {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-                                color = ui.visuals().text_color();
-                            } else {
-                                color = ui.visuals().weak_text_color();
-                            }
-                            let center = reorder_drag_rect.center();
-                            let sp = 5.0;
-                            for dx in [-sp / 2.0, sp / 2.0] {
-                                for dy in [-sp, 0.0, sp] {
-                                    ui.painter().circle_filled(
-                                        center + egui::vec2(dx, dy),
-                                        1.5,
-                                        color,
-                                    );
+                                reorder_drag_rect.max.y = ui.min_rect().max.y;
+                                let r = ui.interact(
+                                    reorder_drag_rect,
+                                    egui::Id::new(portal.id).with("reorder"),
+                                    egui::Sense::drag(),
+                                );
+                                let color;
+                                if r.dragged() {
+                                    reorder_drag_start = Some(i);
+                                    self.portals_hovered.in_list = Some(portal.id);
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                    color = ui.visuals().strong_text_color();
+                                } else if r.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                                    color = ui.visuals().text_color();
+                                } else {
+                                    color = ui.visuals().weak_text_color();
                                 }
-                            }
+                                let center = reorder_drag_rect.center();
+                                let sp = 5.0;
+                                for dx in [-sp / 2.0, sp / 2.0] {
+                                    for dy in [-sp, 0.0, sp] {
+                                        ui.painter().circle_filled(
+                                            center + egui::vec2(dx, dy),
+                                            1.5,
+                                            color,
+                                        );
+                                    }
+                                }
+                            });
                         });
-                    });
 
                 let rect = r.response.rect.intersect(ui.clip_rect());
                 let rect_contains = |p: Option<_>| p.is_some_and(|it| rect.contains(it));
@@ -489,6 +631,10 @@ impl App {
             show_portal_list_contents(ui);
         }
 
+        if let Some(i) = show_in_plot {
+            self.set_camera_dimension(dimension);
+            self.camera.pos = WorldRegion::from(self.world.portals[dimension][i].region).center();
+        }
         if let (Some(i), Some(j)) = (reorder_drag_start, reorder_drag_end) {
             if i < j {
                 self.world.portals[dimension][i..=j].rotate_left(1);
@@ -593,7 +739,7 @@ impl App {
             .map(|pos| r.transform.value_from_position(pos))
             .map(|point| plane.plot_to_world(point, *new_camera))
         {
-            if self.hover_either_dimension {
+            if self.prefs.hover_either_dimension {
                 self.process_portal_hovers(Overworld, plane, hovered_world_pos);
                 self.process_portal_hovers(Nether, plane, hovered_world_pos);
             } else {
@@ -672,7 +818,7 @@ impl App {
         plot_ui.add(polygon);
 
         if self.portals_hovered.contains(portal.id) {
-            if let Some(region) = portal.entity_collision_region(self.entity) {
+            if let Some(region) = portal.entity_collision_region(self.prefs.entity) {
                 let region = WorldRegion::from(
                     region
                         .convert_dimension(portal_dimension, portal_dimension.other())
@@ -692,7 +838,7 @@ impl App {
         if !portal.name.is_empty() {
             let mut job = egui::text::LayoutJob::default();
             job.append(
-                if self.show_all_labels || self.portals_hovered.contains(portal.id) {
+                if self.prefs.show_all_labels || self.portals_hovered.contains(portal.id) {
                     &portal.name
                 } else {
                     ""
@@ -714,7 +860,7 @@ impl App {
     }
 
     fn show_portal_connections_in_plot(&self, plot_ui: &mut egui_plot::PlotUi<'_>, plane: Plane) {
-        if !self.show_all_arrows && self.portals_hovered.is_empty() {
+        if !self.prefs.show_all_arrows && self.portals_hovered.is_empty() {
             return;
         }
 
@@ -738,7 +884,7 @@ impl App {
             let dim2 = get_dim_of_portal(id2);
 
             for id1 in incoming {
-                if self.show_all_arrows
+                if self.prefs.show_all_arrows
                     || self.portals_hovered.contains(*id1)
                     || self.portals_hovered.contains(*id2)
                 {
@@ -788,7 +934,7 @@ impl App {
         dst_point.x -= vector.x as f64;
         dst_point.y -= vector.y as f64;
 
-        let [r, g, b] = match self.arrow_coloring {
+        let [r, g, b] = match self.prefs.arrow_coloring {
             ArrowColoring::BySource => src.color,
             ArrowColoring::ByDestination => dst.color,
         };
@@ -850,7 +996,7 @@ impl App {
         portal_dimension: Dimension,
     ) -> PortalLinkResult {
         let destination_dimension = portal_dimension.other();
-        let Some(entry_region) = portal.entity_collision_region(self.entity) else {
+        let Some(entry_region) = portal.entity_collision_region(self.prefs.entity) else {
             return PortalLinkResult::EntityWontFit;
         };
         let destination_region =
@@ -918,25 +1064,46 @@ impl App {
             }
         }
 
+        fn button_with_kbd(
+            ui: &mut egui::Ui,
+            text: &str,
+            shortcut: &egui::KeyboardShortcut,
+        ) -> egui::Response {
+            egui::Button::new(text)
+                .shortcut_text(ui.ctx().format_shortcut(shortcut))
+                .ui(ui)
+        }
+
         egui::MenuBar::new().ui(ui, |ui| {
             let mut menu_contents = |ui: &mut egui::Ui| {
-                ui.menu_button("File", |ui| {
-                    ui.button("New");
-                    ui.separator();
-                    ui.button("Import…");
-                    ui.button("Export…");
-                    ui.separator();
-                    if !IS_WEB {
-                        ui.button("Open…");
-                    }
-                    ui.button("Open from URL…");
-                    if !IS_WEB {
-                        ui.separator();
-                        ui.button("Save");
-                        ui.button("Save As…");
+                menu_no_autoclose(ui, "File", |ui| {
+                    if button_with_kbd(ui, "New", &kbd_shortcuts::NEW).clicked() {
+                        self.reset();
+                        ui.close();
                     }
                     ui.separator();
-                    ui.checkbox(&mut true, "Auto Save");
+                    if button_with_kbd(ui, "Open…", &kbd_shortcuts::OPEN).clicked() {
+                        self.open();
+                        ui.close();
+                    }
+                    ui.separator();
+                    if button_with_kbd(ui, "Save", &kbd_shortcuts::SAVE).clicked() {
+                        self.save();
+                        ui.close();
+                    }
+                    if button_with_kbd(ui, "Save As…", &kbd_shortcuts::SAVE_AS).clicked() {
+                        self.save_as();
+                        ui.close();
+                    }
+                    ui.separator();
+                    ui.checkbox(&mut self.prefs.autosave, "Auto Save");
+                    ui.separator();
+                    if button_with_kbd(ui, "Import/Export…", &kbd_shortcuts::IMPORT_EXPORT)
+                        .clicked()
+                    {
+                        self.toggle_import_export();
+                        ui.close();
+                    }
 
                     // no File->Quit on web pages
                     if !IS_WEB {
@@ -946,8 +1113,9 @@ impl App {
                         let exit_text = "Exit";
 
                         ui.separator();
-                        if ui.button(exit_text).clicked() {
+                        if button_with_kbd(ui, exit_text, &kbd_shortcuts::QUIT).clicked() {
                             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                            ui.close();
                         }
                     }
                 });
@@ -982,22 +1150,25 @@ impl App {
 
                     ui.separator();
 
-                    ui.checkbox(&mut self.show_zy_plot, "Show ZY Plot");
-                    ui.checkbox(&mut self.show_both_portal_lists, "Show Both Portal Lists");
+                    ui.checkbox(&mut self.prefs.show_zy_plot, "Show ZY Plot");
+                    ui.checkbox(
+                        &mut self.prefs.show_both_portal_lists,
+                        "Show Both Portal Lists",
+                    );
 
                     ui.separator();
 
-                    ui.checkbox(&mut self.show_all_labels, "Show Portal Labels");
-                    ui.checkbox(&mut self.show_all_arrows, "Show Link Arrows");
+                    ui.checkbox(&mut self.prefs.show_all_labels, "Show Portal Labels");
+                    ui.checkbox(&mut self.prefs.show_all_arrows, "Show Link Arrows");
                     ui.horizontal(|ui| {
                         ui.strong("Color arrows by");
                         ui.selectable_value(
-                            &mut self.arrow_coloring,
+                            &mut self.prefs.arrow_coloring,
                             ArrowColoring::BySource,
                             "Source",
                         );
                         ui.selectable_value(
-                            &mut self.arrow_coloring,
+                            &mut self.prefs.arrow_coloring,
                             ArrowColoring::ByDestination,
                             "Destination",
                         );
@@ -1006,16 +1177,23 @@ impl App {
 
                 menu_no_autoclose(ui, "Settings", |ui| {
                     ui.checkbox(
-                        &mut self.hover_either_dimension,
+                        &mut self.prefs.hover_either_dimension,
                         "Hover Portals In Both Dimensions",
                     )
                     .on_hover_text(
                         include_str!("resources/text/hover_either_dimension.txt").trim(),
                     );
-                    ui.checkbox(&mut self.lock_portal_size, "Lock Portal Size When Editing")
-                        .on_hover_text(include_str!("resources/text/lock_portal_size.txt").trim());
+                    ui.checkbox(
+                        &mut self.prefs.lock_portal_size,
+                        "Lock Portal Size When Editing",
+                    )
+                    .on_hover_text(include_str!("resources/text/lock_portal_size.txt").trim());
                     ui.separator();
                     egui::global_theme_preference_buttons(ui);
+                    ui.separator();
+                    if ui.button("Reset all settings").clicked() {
+                        self.prefs = Preferences::default();
+                    };
                 });
             };
 
@@ -1062,14 +1240,80 @@ impl App {
 
             menu_no_autoclose(ui, "Entity size", |ui| self.show_entity_config(ui));
 
-            ui_unless_overflow(ui, |ui| ui.small(format!("{:#.02}", self.entity)));
+            ui_unless_overflow(ui, |ui| ui.small(format!("{:#.02}", self.prefs.entity)));
         });
+    }
+
+    fn show_import_export_modal(&mut self, ctx: &egui::Context) {
+        if let Some(mut text) = self.import_export_modal_text.take() {
+            let r = egui::Modal::new(egui::Id::new("import_export")).show(ctx, |ui| {
+                let r = egui::ScrollArea::vertical()
+                    .max_width(ui.ctx().screen_rect().width() / 2.0)
+                    .max_height(ui.ctx().screen_rect().height() / 4.0)
+                    .auto_shrink(false)
+                    .show(ui, |ui| {
+                        ui.with_layout(
+                            egui::Layout::top_down(egui::Align::LEFT)
+                                .with_cross_justify(true)
+                                .with_main_justify(true),
+                            |ui| {
+                                egui::TextEdit::multiline(&mut text)
+                                    .clip_text(false)
+                                    .show(ui)
+                                    .response
+                            },
+                        )
+                        .inner
+                    })
+                    .inner;
+                if r.changed() {
+                    self.cached_import_export_modal_text_deserialized = None;
+                }
+
+                let deserialized = self
+                    .cached_import_export_modal_text_deserialized
+                    .take()
+                    .unwrap_or_else(|| serde_json::from_str(&text));
+
+                match &deserialized {
+                    Ok(_) => ui.label(""),
+                    Err(e) => ui.colored_label(ui.visuals().error_fg_color, e.to_string()),
+                };
+
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        ui.close();
+                    }
+
+                    if ui
+                        .add_enabled(deserialized.is_ok(), egui::Button::new("Import"))
+                        .clicked()
+                        && let Ok(world) = &deserialized
+                        && self.is_ok_to_discard_state()
+                    {
+                        self.load(world.clone());
+                        ui.close();
+                    }
+                });
+
+                self.cached_import_export_modal_text_deserialized = Some(deserialized);
+            });
+
+            if r.should_close() {
+                self.cached_import_export_modal_text_deserialized = None;
+            } else {
+                self.import_export_modal_text = Some(text);
+            }
+        }
     }
 }
 
 impl eframe::App for App {
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.save_to_file();
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        match serde_json::to_string_pretty(&self.prefs) {
+            Ok(prefs_str) => storage.set_string(Preferences::STORAGE_KEY, prefs_str),
+            Err(e) => log::error!("error saving preferences: {e}"),
+        }
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
@@ -1081,9 +1325,47 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
+        if ctx.input(|input| input.viewport().close_requested()) && !self.is_ok_to_discard_state() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
+
+        // Disable the whole UI if there is a dialog open.
+        let mut disable_everything = false;
+        if let Some(async_task) = self.async_task.take() {
+            match async_task.try_recv() {
+                // still waiting
+                Err(TryRecvError::Empty) => {
+                    disable_everything = true;
+                    self.async_task = Some(async_task);
+                }
+                // async task crashed, probably
+                Err(TryRecvError::Disconnected) => {
+                    show_error_dialog(("Error", "Channel disconnected"));
+                }
+                // async task succeeded
+                Ok(Ok(ok)) => match ok {
+                    AppAsyncTaskOk::None => (),
+                    AppAsyncTaskOk::MarkSaved { path } => {
+                        self.unsaved_changes = false;
+                        self.prefs.file_path = path;
+                    }
+                    AppAsyncTaskOk::Load { path, world } => {
+                        self.load(world);
+                        self.prefs.file_path = path;
+                    }
+                },
+                // async task failed
+                Ok(Err(e)) => show_error_dialog(e),
+            }
+        }
+
         egui_extras::install_image_loaders(ctx); // ok to call every frame
 
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+            if disable_everything {
+                ui.disable();
+            }
+
             ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
             ui_unless_overflow(ui, |ui| self.show_menu_bar(ui, false, false))
                 .or_else(|| ui_unless_overflow(ui, |ui| self.show_menu_bar(ui, false, true)))
@@ -1091,6 +1373,10 @@ impl eframe::App for App {
         });
 
         egui::TopBottomPanel::bottom("bottom_bar").show(ctx, |ui| {
+            if disable_everything {
+                ui.disable();
+            }
+
             ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
             ui.spacing_mut().scroll.bar_width /= 1.5;
             ui.spacing_mut().scroll.bar_inner_margin = 0.0;
@@ -1118,6 +1404,10 @@ impl eframe::App for App {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            if disable_everything {
+                ui.disable();
+            }
+
             ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
 
             let mut new_camera = self.camera;
@@ -1140,7 +1430,7 @@ impl eframe::App for App {
                 (Plane::ZY, right_bottom),
                 (Plane::XZ, left_top),
             ] {
-                if !self.show_zy_plot && plane == Plane::ZY {
+                if !self.prefs.show_zy_plot && plane == Plane::ZY {
                     continue;
                 }
                 ui.put(rect, |ui: &mut egui::Ui| {
@@ -1157,7 +1447,7 @@ impl eframe::App for App {
                 .step((now - self.animation_state.last_frame).as_secs_f64());
             self.animation_state.last_frame = now;
 
-            let controls_rect = if self.show_zy_plot {
+            let controls_rect = if self.prefs.show_zy_plot {
                 right_top
             } else {
                 right_top.union(right_bottom)
@@ -1169,12 +1459,15 @@ impl eframe::App for App {
             let is_text_field_active = ui.ctx().wants_keyboard_input();
             ui.input_mut(|input| {
                 if !input.pointer.is_decidedly_dragging() && !is_text_field_active {
-                    if self.last_saved_state != self.world {
-                        let state_to_save =
-                            std::mem::replace(&mut self.last_saved_state, self.world.clone());
+                    if self.last_frame_state != self.world {
+                        self.unsaved_changes = true;
+                        let old_state =
+                            std::mem::replace(&mut self.last_frame_state, self.world.clone());
                         self.redo_history.clear();
-                        self.undo_history.push(state_to_save);
-                        self.save_to_file();
+                        self.undo_history.push(old_state);
+                    }
+                    if self.prefs.autosave && self.unsaved_changes {
+                        self.save();
                     }
 
                     // Consume the most specific shortcut first
@@ -1182,10 +1475,10 @@ impl eframe::App for App {
                         || input.consume_shortcut(&kbd_shortcuts::CMD_Y)
                     {
                         self.redo();
-                        self.save_to_file();
+                        self.save();
                     } else if input.consume_shortcut(&kbd_shortcuts::CMD_Z) {
                         self.undo();
-                        self.save_to_file();
+                        self.save();
                     }
 
                     if input.consume_shortcut(&kbd_shortcuts::SWITCH_DIMENSIONS) {
@@ -1195,14 +1488,37 @@ impl eframe::App for App {
                     if input.consume_shortcut(&kbd_shortcuts::RESET_CAMERA) {
                         self.camera.reset();
                     }
+
+                    if input.consume_shortcut(&kbd_shortcuts::NEW) {
+                        self.reset();
+                    }
+                    if input.consume_shortcut(&kbd_shortcuts::IMPORT_EXPORT) {
+                        self.toggle_import_export();
+                    }
+                    if input.consume_shortcut(&kbd_shortcuts::OPEN) {
+                        self.open();
+                    }
+                    if input.consume_shortcut(&kbd_shortcuts::SAVE) {
+                        self.save();
+                    }
+                    if input.consume_shortcut(&kbd_shortcuts::SAVE_AS) {
+                        self.save_as();
+                    }
+                    if input.consume_shortcut(&kbd_shortcuts::QUIT) {
+                        if self.is_ok_to_discard_state() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    }
                 }
             });
         });
 
+        self.show_import_export_modal(ctx);
+
         let (cached_world, cached_entity) = &self.cached_state;
-        if (cached_world, cached_entity) != (&self.world, &self.entity) {
+        if (cached_world, cached_entity) != (&self.world, &self.prefs.entity) {
             let t = std::time::Instant::now();
-            self.cached_state = (self.world.clone(), self.entity);
+            self.cached_state = (self.world.clone(), self.prefs.entity);
             self.recalculate_portal_links();
             log::debug!("Recalculated portal links in {:?}", t.elapsed());
         }
@@ -1272,7 +1588,7 @@ enum PortalLinkResult {
 fn show_link_result(
     ui: &mut egui::Ui,
     result: Option<&(PortalLinkResult, Vec<PortalId>)>,
-    portals_by_id: &HashMap<PortalId, &Portal>,
+    portals_by_id: &HashMap<PortalId, Portal>,
 ) {
     let Some((outgoing, incoming)) = result else {
         ui.colored_label(ui.visuals().warn_fg_color, "Calculating ...");
@@ -1306,7 +1622,7 @@ fn push_portal_list_text(
     ui: &egui::Ui,
     atoms: &mut egui::Atoms<'_>,
     portal_ids: &[PortalId],
-    portals_by_id: &HashMap<PortalId, &Portal>,
+    portals_by_id: &HashMap<PortalId, Portal>,
 ) {
     let mut is_first = true;
     for id in portal_ids {
@@ -1352,7 +1668,7 @@ impl AnimationState {
     }
 }
 
-#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 enum ArrowColoring {
     #[default]
     BySource,
@@ -1445,4 +1761,36 @@ fn img_button(ui: &mut egui::Ui, source: egui::ImageSource<'_>) -> egui::Respons
         )
     })
     .inner
+}
+
+/// Task to complete before re-enabling the UI.
+enum AppAsyncTaskOk {
+    /// No action needed.
+    None,
+    /// File has been saved; clear the "unsaved" flag.
+    MarkSaved { path: Option<PathBuf> },
+    /// Load world from file.
+    Load { path: Option<PathBuf>, world: World },
+}
+/// Error message dialog to display before re-enabling the UI.
+struct AppAsyncTaskErr {
+    title: String,
+    description: String,
+}
+impl<T: ToString, D: ToString> From<(T, D)> for AppAsyncTaskErr {
+    fn from((title, description): (T, D)) -> Self {
+        Self {
+            title: title.to_string(),
+            description: description.to_string(),
+        }
+    }
+}
+
+fn show_error_dialog(e: impl Into<AppAsyncTaskErr>) {
+    let e = e.into();
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title(e.title)
+        .set_description(e.description)
+        .show();
 }
