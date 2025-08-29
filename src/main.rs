@@ -402,7 +402,7 @@ impl App {
                     .speed(0.01),
             );
             ui.checkbox(&mut self.prefs.entity.is_projectile, "Projectile")
-                .on_hover_text(include_str!("resources/text/projectile.txt").trim());
+                .on_hover_text(include_str!("text/projectile.txt").trim());
         });
 
         ui.separator();
@@ -428,7 +428,7 @@ impl App {
             ui.set_min_height(26.0);
 
             ui.scope(|ui| {
-                if big_img_button(ui, egui::include_image!("resources/img/portal-plus.svg"))
+                if big_img_button(ui, egui::include_image!("img/portal-plus.svg"))
                     .on_hover_text("Add portal")
                     .clicked()
                 {
@@ -438,12 +438,9 @@ impl App {
                     }
                 }
 
-                if big_img_button(
-                    ui,
-                    egui::include_image!("resources/img/map-marker-plus.svg"),
-                )
-                .on_hover_text("Add test point")
-                .clicked()
+                if big_img_button(ui, egui::include_image!("img/map-marker-plus.svg"))
+                    .on_hover_text("Add test point")
+                    .clicked()
                 {
                     self.world.test_points[dimension].push(self.camera.pos);
                 }
@@ -477,7 +474,7 @@ impl App {
             egui::Sides::new().shrink_left().show(
                 ui,
                 |ui| {
-                    if img_button(ui, egui::include_image!("resources/img/crosshairs.svg"))
+                    if img_button(ui, egui::include_image!("img/crosshairs.svg"))
                         .on_hover_text("Show in plot")
                         .clicked()
                     {
@@ -509,7 +506,7 @@ impl App {
                     }
                 },
                 |ui| {
-                    keep = !img_button(ui, egui::include_image!("resources/img/delete.svg"))
+                    keep = !img_button(ui, egui::include_image!("img/delete.svg"))
                         .on_hover_text("Delete test point")
                         .clicked();
                 },
@@ -528,18 +525,15 @@ impl App {
 
                 const OUTLINE_WIDTH: f32 = 2.0;
 
-                let r =
-                    egui::Frame::new()
-                        .outer_margin(OUTLINE_WIDTH)
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let mut reorder_drag_rect = egui::Rect::from_min_size(
-                                    ui.cursor().min,
-                                    egui::vec2(12.0, 18.0),
-                                );
-                                ui.advance_cursor_after_rect(reorder_drag_rect);
+                let r = egui::Frame::new()
+                    .outer_margin(OUTLINE_WIDTH)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let mut reorder_drag_rect =
+                                egui::Rect::from_min_size(ui.cursor().min, egui::vec2(12.0, 18.0));
+                            ui.advance_cursor_after_rect(reorder_drag_rect);
 
-                                ui.vertical(|ui| {
+                            ui.vertical(|ui| {
                                 egui::collapsing_header::CollapsingState::load_with_default_open(
                                     ui.ctx(),
                                     egui::Id::new(portal.id).with("header"),
@@ -549,12 +543,15 @@ impl App {
                                     egui::Sides::new().shrink_left().show(
                                         ui,
                                         |ui| {
-                    if img_button(ui, egui::include_image!("resources/img/crosshairs.svg"))
-                        .on_hover_text("Show in plot")
-                        .clicked()
-                    {
-                        show_in_plot=Some(i);
-                    }
+                                            if img_button(
+                                                ui,
+                                                egui::include_image!("img/crosshairs.svg"),
+                                            )
+                                            .on_hover_text("Show in plot")
+                                            .clicked()
+                                            {
+                                                show_in_plot = Some(i);
+                                            }
 
                                             ui.color_edit_button_srgb(&mut portal.color);
 
@@ -567,7 +564,7 @@ impl App {
                                         |ui| {
                                             if img_button(
                                                 ui,
-                                                egui::include_image!("resources/img/delete.svg"),
+                                                egui::include_image!("img/delete.svg"),
                                             )
                                             .on_hover_text("Delete test point")
                                             .clicked()
@@ -616,37 +613,37 @@ impl App {
                                 );
                             });
 
-                                reorder_drag_rect.max.y = ui.min_rect().max.y;
-                                let r = ui.interact(
-                                    reorder_drag_rect,
-                                    egui::Id::new(portal.id).with("reorder"),
-                                    egui::Sense::drag(),
-                                );
-                                let color;
-                                if r.dragged() {
-                                    reorder_drag_start = Some(i);
-                                    self.portals_hovered.in_list = Some(portal.id);
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                                    color = ui.visuals().strong_text_color();
-                                } else if r.hovered() {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-                                    color = ui.visuals().text_color();
-                                } else {
-                                    color = ui.visuals().weak_text_color();
+                            reorder_drag_rect.max.y = ui.min_rect().max.y;
+                            let r = ui.interact(
+                                reorder_drag_rect,
+                                egui::Id::new(portal.id).with("reorder"),
+                                egui::Sense::drag(),
+                            );
+                            let color;
+                            if r.dragged() {
+                                reorder_drag_start = Some(i);
+                                self.portals_hovered.in_list = Some(portal.id);
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                color = ui.visuals().strong_text_color();
+                            } else if r.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                                color = ui.visuals().text_color();
+                            } else {
+                                color = ui.visuals().weak_text_color();
+                            }
+                            let center = reorder_drag_rect.center();
+                            let sp = 5.0;
+                            for dx in [-sp / 2.0, sp / 2.0] {
+                                for dy in [-sp, 0.0, sp] {
+                                    ui.painter().circle_filled(
+                                        center + egui::vec2(dx, dy),
+                                        1.5,
+                                        color,
+                                    );
                                 }
-                                let center = reorder_drag_rect.center();
-                                let sp = 5.0;
-                                for dx in [-sp / 2.0, sp / 2.0] {
-                                    for dy in [-sp, 0.0, sp] {
-                                        ui.painter().circle_filled(
-                                            center + egui::vec2(dx, dy),
-                                            1.5,
-                                            color,
-                                        );
-                                    }
-                                }
-                            });
+                            }
                         });
+                    });
 
                 let rect = r.response.rect.intersect(ui.clip_rect());
                 let rect_contains = |p: Option<_>| p.is_some_and(|it| rect.contains(it));
@@ -1237,14 +1234,12 @@ impl App {
                         &mut self.prefs.hover_either_dimension,
                         "Hover Portals In Both Dimensions",
                     )
-                    .on_hover_text(
-                        include_str!("resources/text/hover_either_dimension.txt").trim(),
-                    );
+                    .on_hover_text(include_str!("text/hover_either_dimension.txt").trim());
                     ui.checkbox(
                         &mut self.prefs.lock_portal_size,
                         "Lock Portal Size When Editing",
                     )
-                    .on_hover_text(include_str!("resources/text/lock_portal_size.txt").trim());
+                    .on_hover_text(include_str!("text/lock_portal_size.txt").trim());
                     ui.separator();
                     egui::global_theme_preference_buttons(ui);
                     ui.separator();
@@ -1276,7 +1271,7 @@ impl App {
                 }
 
                 ui.horizontal(|ui| {
-                    if img_button(ui, egui::include_image!("resources/img/home.svg"))
+                    if img_button(ui, egui::include_image!("img/home.svg"))
                         .on_hover_text("Reset camera")
                         .clicked()
                     {

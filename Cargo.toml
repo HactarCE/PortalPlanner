@@ -69,6 +69,7 @@ LegalCopyright = "Copyright © 2025 HactarCE"
 [package.metadata.bundle]
 name = "Portal Planner"
 identifier = "dev.ajfarkas.portalplanner"
+icon = ["resources/icon/*.png", "resources/icon/*.ico"]
 copyright = "Copyright © 2025 HactarCE"
 category = "Utility"
 
