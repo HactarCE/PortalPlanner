@@ -1,9 +1,9 @@
 use egui::NumExt;
 use serde::{Deserialize, Serialize};
 
+use crate::util::max_range_distance_to;
 use crate::{
     Axis, BlockPos, BlockRegion, ConvertDimension, Dimension, Entity, PortalId, WorldRegion,
-    util::max_range_distance_to,
 };
 
 /// Horizontal axis perpendicular to a portal's surface.
@@ -306,8 +306,8 @@ impl Portal {
             && ((self.region.min.z - r)..=(self.region.max.z + r)).contains(&pos.z)
     }
 
-    /// Returns whether `self` is within the portal search range for **any** point
-    /// in `region`.
+    /// Returns whether `self` is within the portal search range for **any**
+    /// point in `region`.
     pub fn is_in_range_of_region(&self, region: BlockRegion, dimension: Dimension) -> bool {
         // Ignore Y axis
         let r = dimension.portal_search_range();

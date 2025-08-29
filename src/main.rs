@@ -1,11 +1,9 @@
 //! Tool for planning Minecraft nether portal linkages.
 
 use core::f32;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-};
+use std::path::PathBuf;
 
 use egui::Widget;
 use egui::emath::GuiRounding;
@@ -47,9 +45,7 @@ pub const ANIMATION_SPEED: f64 = 8.0;
 
 #[allow(missing_docs)]
 mod kbd_shortcuts {
-    use egui::Key;
-    use egui::KeyboardShortcut as Shortcut;
-    use egui::Modifiers as Mods;
+    use egui::{Key, KeyboardShortcut as Shortcut, Modifiers as Mods};
 
     /// Ctrl+Z shortcut for undo.
     pub const CMD_Z: Shortcut = Shortcut::new(Mods::COMMAND, Key::Z);
@@ -1504,10 +1500,9 @@ impl eframe::App for App {
                     if input.consume_shortcut(&kbd_shortcuts::SAVE_AS) {
                         self.save_as();
                     }
-                    if input.consume_shortcut(&kbd_shortcuts::QUIT) {
-                        if self.is_ok_to_discard_state() {
-                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
+                    if input.consume_shortcut(&kbd_shortcuts::QUIT) && self.is_ok_to_discard_state()
+                    {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 }
             });

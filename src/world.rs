@@ -412,9 +412,8 @@ pub struct PortalDestinations<'a> {
 mod tests {
     use proptest::prelude::*;
 
-    use crate::{Entity, PortalAxis};
-
     use super::*;
+    use crate::{Entity, PortalAxis};
 
     #[test]
     fn test_minima_by_opt_key() {
