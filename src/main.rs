@@ -67,7 +67,7 @@ mod kbd_shortcuts {
 
 fn main() -> eframe::Result {
     env_logger::builder()
-        .filter_module("portal_tool", log::LevelFilter::Debug)
+        .filter_module("portal_planner", log::LevelFilter::Debug)
         .init();
     eframe::run_native(
         "Portal Tool",
