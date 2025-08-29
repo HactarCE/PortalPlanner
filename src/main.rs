@@ -33,8 +33,9 @@ pub use region::{BlockRegion, WorldRegion};
 use threads::AsyncSafe;
 pub use world::{ConvertDimension, Dimension, World, WorldPortals};
 
-/// Application title.
-pub const TITLE: &str = "Portal Planner";
+const TITLE: &str = "Portal Planner";
+const APP_ID: &str = "PortalPlanner";
+const ICON_32_PNG_DATA: &[u8] = include_bytes!("../resources/icon/portalplanner_32x32.png");
 
 const IS_WEB: bool = cfg!(target_arch = "wasm32");
 
@@ -71,9 +72,21 @@ mod kbd_shortcuts {
 fn main() -> eframe::Result {
     env_logger::init();
 
+    let icon_data = eframe::icon_data::from_png_bytes(ICON_32_PNG_DATA)
+        .expect("error loading application icon");
+
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title(crate::TITLE)
+            .with_app_id(crate::APP_ID)
+            .with_icon(icon_data)
+            .with_maximized(true),
+        ..Default::default()
+    };
+
     eframe::run_native(
         "Portal Tool",
-        eframe::NativeOptions::default(),
+        native_options,
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
     )
 }
