@@ -161,13 +161,17 @@ impl WorldPortals {
         let target_block = BlockPos::from(
             entity_position.convert_dimension(entity_dimension, destination_dimension),
         );
-        let distances = self[destination_dimension]
+        let candidates = self[destination_dimension]
             .iter()
+            .map(|p| p)
             .filter(|p| p.is_in_range_of_point(target_block, destination_dimension))
+            .collect_vec();
+        let distances = candidates
+            .iter()
             .map(|p| p.region.min_euclidean_distance_sq_to_point(target_block))
             .collect_vec();
-        let min_distance = distances.iter().min();
-        std::iter::zip(&self[destination_dimension], &distances)
+        let min_distance = distances.iter().min().copied();
+        std::iter::zip(candidates, distances)
             .filter(|(_, distance)| Some(*distance) == min_distance)
             .map(|(portal, _)| portal)
             .collect()
