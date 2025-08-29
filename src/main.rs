@@ -38,9 +38,6 @@ pub const TITLE: &str = "Portal Planner";
 
 const IS_WEB: bool = cfg!(target_arch = "wasm32");
 
-/// Scroll sensitivity override for egui, particularly when zooming in/out of
-/// the plot.
-pub const SCROLL_SENSITIVITY: f32 = 0.25;
 /// Margin between plots.
 pub const PLOT_MARGIN: f32 = 8.0;
 
@@ -1365,14 +1362,6 @@ impl eframe::App for App {
         match serde_json::to_string_pretty(&self.prefs) {
             Ok(prefs_str) => storage.set_string(Preferences::STORAGE_KEY, prefs_str),
             Err(e) => log::error!("error saving preferences: {e}"),
-        }
-    }
-
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-        for e in &mut raw_input.events {
-            if let egui::Event::MouseWheel { delta, .. } = e {
-                *delta *= SCROLL_SENSITIVITY;
-            }
         }
     }
 
