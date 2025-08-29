@@ -35,7 +35,7 @@ pub use world::{ConvertDimension, Dimension, World, WorldPortals};
 
 const TITLE: &str = "Portal Planner";
 const APP_ID: &str = "PortalPlanner";
-const ICON_32_PNG_DATA: &[u8] = include_bytes!("../resources/icon/portalplanner_32x32.png");
+const ICON_256_PNG_DATA: &[u8] = include_bytes!("../resources/icon/portalplanner_256x256.png");
 
 const IS_WEB: bool = cfg!(target_arch = "wasm32");
 
@@ -72,7 +72,7 @@ mod kbd_shortcuts {
 fn main() -> eframe::Result {
     env_logger::init();
 
-    let icon_data = eframe::icon_data::from_png_bytes(ICON_32_PNG_DATA)
+    let icon_data = eframe::icon_data::from_png_bytes(ICON_256_PNG_DATA)
         .expect("error loading application icon");
 
     let native_options = eframe::NativeOptions {
