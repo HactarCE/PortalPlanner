@@ -1,5 +1,7 @@
 //! Tool for planning Minecraft nether portal linkages.
 
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use core::f32;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;

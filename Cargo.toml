@@ -55,3 +55,23 @@ web-sys = "0.3.70"
 
 [dev-dependencies]
 proptest = "1.7.0"
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
+[package.metadata.winres]
+FileDescription = "Portal Planner"
+ProductName = "PortalPlanner"
+ProductVersion = "0.1.0"
+OriginalFilename = "portal_planner.exe"
+LegalCopyright = "Copyright © 2025 HactarCE"
+
+[package.metadata.bundle]
+name = "Portal Planner"
+identifier = "dev.ajfarkas.portalplanner"
+copyright = "Copyright © 2025 HactarCE"
+category = "Utility"
+
+[package.metadata.trunk.build]
+public_url = "/PortalPlanner"
+filehash = false
