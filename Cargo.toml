@@ -1,6 +1,6 @@
 [package]
 name = "portal_planner"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 
 [lints.rust]
@@ -62,7 +62,7 @@ winres = "0.1"
 [package.metadata.winres]
 FileDescription = "Portal Planner"
 ProductName = "PortalPlanner"
-ProductVersion = "0.1.1"
+ProductVersion = "0.1.2"
 OriginalFilename = "portal_planner.exe"
 LegalCopyright = "Copyright © 2025 HactarCE"
 
