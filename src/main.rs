@@ -350,6 +350,7 @@ impl App {
             let old_state = std::mem::replace(&mut self.world, new_state);
             self.last_frame_state = self.world.clone();
             self.redo_history.push(old_state);
+            self.unsaved_changes = true;
         }
     }
     fn redo(&mut self) {
@@ -357,6 +358,7 @@ impl App {
             let old_state = std::mem::replace(&mut self.world, new_state);
             self.last_frame_state = self.world.clone();
             self.undo_history.push(old_state);
+            self.unsaved_changes = true;
         }
     }
 
@@ -1521,7 +1523,8 @@ impl eframe::App for App {
                         self.undo_history.push(old_state);
                     }
                     #[cfg(not(target_arch = "wasm32"))]
-                    if self.prefs.autosave && self.unsaved_changes {
+                    if self.prefs.autosave && self.unsaved_changes && self.prefs.file_path.is_some()
+                    {
                         self.save();
                     }
 
@@ -1530,10 +1533,8 @@ impl eframe::App for App {
                         || input.consume_shortcut(&kbd_shortcuts::CMD_Y)
                     {
                         self.redo();
-                        self.save();
                     } else if input.consume_shortcut(&kbd_shortcuts::CMD_Z) {
                         self.undo();
-                        self.save();
                     }
 
                     if input.consume_shortcut(&kbd_shortcuts::SWITCH_DIMENSIONS) {
